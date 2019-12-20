@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+if [[ -z "${rhasspydialogue_hermes}" ]]; then
+    this_dir="$( cd "$( dirname "$0" )" && pwd )"
+    rhasspydialogue_hermes="${this_dir}/../lib/rhasspydialogue_hermes"
+fi
+
+"${rhasspydialogue_hermes}/rhasspydialogue_hermes" "$@"

@@ -1,0 +1,6 @@
+__pycache__/
+.venv/
+debian/rhasspy-dialogue-hermes*
+dist/
+*.egg-info/
+pyinstaller/
