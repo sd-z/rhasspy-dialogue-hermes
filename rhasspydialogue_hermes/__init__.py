@@ -406,6 +406,7 @@ class DialogueHermesMqtt:
                 NluIntentNotRecognized.topic(),
                 AsrTextCaptured.topic(),
             ] + list(self.wakeword_topics.keys())
+
             for topic in topics:
                 self.client.subscribe(topic)
                 _LOGGER.debug("Subscribed to %s", topic)
@@ -461,14 +462,14 @@ class DialogueHermesMqtt:
 
                 # Run outside event loop
                 self.handle_text_captured(AsrTextCaptured(**json_payload))
-            elif msg.topic.startswith(NluIntent.topic(intent_name="")):
+            elif NluIntent.is_topic(msg.topic):
                 # Intent recognized
                 json_payload = json.loads(msg.payload)
                 if not self._check_sessionId(json_payload):
                     return
 
                 self.handle_recognized(NluIntent(**json_payload))
-            elif msg.topic.startswith(NluIntentNotRecognized.topic()):
+            elif msg.topic == NluIntentNotRecognized.topic():
                 # Intent recognized
                 json_payload = json.loads(msg.payload)
                 if not self._check_sessionId(json_payload):
@@ -485,9 +486,8 @@ class DialogueHermesMqtt:
                     return
 
                 wakeword_id = self.wakeword_topics[msg.topic]
-                asyncio.run_coroutine_threadsafe(
-                    self.handle_wake(wakeword_id, HotwordDetected(**json_payload)),
-                    self.loop,
+                self.publish_all_async(
+                    self.handle_wake(wakeword_id, HotwordDetected(**json_payload))
                 )
         except Exception:
             _LOGGER.exception("on_message")
@@ -504,6 +504,13 @@ class DialogueHermesMqtt:
             self.client.publish(topic, payload)
         except Exception:
             _LOGGER.exception("on_message")
+
+    def publish_all_async(self, coro):
+        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+        for message in future.result():
+            self.publish(message)
+
+    # -------------------------------------------------------------------------
 
     async def say_and_wait(
         self, text: str, siteId="default"

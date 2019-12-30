@@ -14,7 +14,10 @@ def main():
     """Main method."""
     parser = argparse.ArgumentParser(prog="rhasspydialogue_hermes")
     parser.add_argument(
-        "--wakewordId", action="append", help="Wakeword ID(s) to listen for"
+        "--wakewordId",
+        action="append",
+        default=["default"],
+        help="Wakeword ID(s) to listen for (default=default)",
     )
     parser.add_argument(
         "--host", default="localhost", help="MQTT host (default: localhost)"
