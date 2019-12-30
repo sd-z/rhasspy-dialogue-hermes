@@ -23,7 +23,9 @@ def main():
         "--port", type=int, default=1883, help="MQTT port (default: 1883)"
     )
     parser.add_argument(
-        "--siteId", default="default", help="Hermes siteId of this server"
+        "--siteId",
+        action="append",
+        help="Hermes siteId(s) to listen for (default: all)",
     )
     parser.add_argument(
         "--debug", action="store_true", help="Print DEBUG messages to the console"
@@ -42,7 +44,7 @@ def main():
         loop = asyncio.get_event_loop()
         client = mqtt.Client()
         hermes = DialogueHermesMqtt(
-            client, siteId=args.siteId, wakewordIds=args.wakewordId, loop=loop
+            client, siteIds=args.siteId, wakewordIds=args.wakewordId, loop=loop
         )
 
         def on_disconnect(client, userdata, flags, rc):
