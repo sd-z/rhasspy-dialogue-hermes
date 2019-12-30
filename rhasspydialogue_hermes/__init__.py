@@ -37,6 +37,7 @@ class SessionInfo:
     """Information for an activte or queued dialogue session."""
 
     sessionId: str = attr.ib()
+    siteId: str = attr.ib()
     start_session: DialogueStartSession = attr.ib()
     customData: str = attr.ib(default="")
     intentFilter: typing.Optional[typing.List[str]] = attr.ib(default=None)
@@ -46,6 +47,7 @@ class SessionInfo:
 
 # -----------------------------------------------------------------------------
 
+# pylint: disable=W0511
 # TODO: Session timeouts
 # TODO: Dialogue configure message
 # TODO: Entity injection
@@ -66,7 +68,7 @@ class DialogueHermesMqtt:
         self.loop = loop or asyncio.get_event_loop()
 
         self.session: typing.Optional[SessionInfo] = None
-        self.session_queue = deque()
+        self.session_queue: typing.Deque[SessionInfo] = deque()
 
         self.wakeword_topics = {
             HotwordDetected.topic(wakewordId=w): w for w in wakewordIds or []
@@ -78,17 +80,44 @@ class DialogueHermesMqtt:
 
     # -------------------------------------------------------------------------
 
-    async def handle_start(self, start_session: DialogueStartSession):
+    async def handle_start(
+        self, start_session: DialogueStartSession
+    ) -> typing.AsyncIterable[
+        typing.Union[
+            TtsSay,
+            DialogueSessionStarted,
+            DialogueSessionEnded,
+            DialogueSessionQueued,
+            AsrStartListening,
+        ]
+    ]:
         """Starts or queues a new dialogue session."""
         try:
-            sessionId = f"{self.siteId}-{uuid4()}"
-            new_session = SessionInfo(sessionId=sessionId, start_session=start_session)
+            sessionId = str(uuid4())
+            new_session = SessionInfo(
+                sessionId=sessionId,
+                siteId=start_session.siteId,
+                start_session=start_session,
+            )
 
-            await self.start_session(new_session)
+            async for start_result in self.start_session(
+                new_session, siteId=start_session.siteId
+            ):
+                yield start_result
         except Exception:
             _LOGGER.exception("handle_start")
 
-    async def start_session(self, new_session: SessionInfo):
+    async def start_session(
+        self, new_session: SessionInfo, siteId: str = "default"
+    ) -> typing.AsyncIterable[
+        typing.Union[
+            TtsSay,
+            DialogueSessionStarted,
+            DialogueSessionEnded,
+            DialogueSessionQueued,
+            AsrStartListening,
+        ]
+    ]:
         """Start a new session."""
         start_session = new_session.start_session
 
@@ -111,11 +140,17 @@ class DialogueHermesMqtt:
 
             if notification.text:
                 # Forward to TTS
-                yield (await self.say_and_wait(notification.text))
+                async for tts_result in self.say_and_wait(
+                    notification.text, siteId=siteId
+                ):
+                    yield tts_result
 
             # End notification session immedately
             _LOGGER.debug("Session ended nominally: %s", self.session.sessionId)
-            await self.end_session(DialogueSessionTerminationReason.NOMINAL)
+            async for end_result in self.end_session(
+                DialogueSessionTerminationReason.NOMINAL, siteId=siteId
+            ):
+                yield end_result
         else:
             # Action session
             action = start_session.init
@@ -133,7 +168,7 @@ class DialogueHermesMqtt:
                     self.session_queue.append(new_session)
                     yield DialogueSessionQueued(
                         sessionId=new_session.sessionId,
-                        siteId=self.siteId,
+                        siteId=siteId,
                         customData=new_session.customData,
                     )
                 else:
@@ -146,25 +181,28 @@ class DialogueHermesMqtt:
 
                 if action.text:
                     # Forward to TTS
-                    await self.say_and_wait(action.text)
+                    async for tts_result in self.say_and_wait(
+                        action.text, siteId=siteId
+                    ):
+                        yield tts_result
 
                 # Start ASR listening
                 _LOGGER.debug("Listening for session %s", self.session.sessionId)
-                yield AsrStartListening(
-                    siteId=self.siteId, sessionId=new_session.sessionId
-                )
+                yield AsrStartListening(siteId=siteId, sessionId=new_session.sessionId)
 
         self.session = new_session
         yield DialogueSessionStarted(
-            siteId=self.siteId,
+            siteId=siteId,
             sessionId=new_session.sessionId,
             customData=new_session.customData,
         )
 
-    async def handle_continue(self, continue_session: DialogueContinueSession):
+    async def handle_continue(
+        self, continue_session: DialogueContinueSession
+    ) -> typing.AsyncIterable[typing.Union[TtsSay, AsrStartListening]]:
         """Continue the existing session."""
         try:
-            assert self.session, "No session"
+            assert self.session is not None
 
             # Update fields
             self.session.customData = (
@@ -182,35 +220,58 @@ class DialogueHermesMqtt:
             _LOGGER.debug("Continuing session %s", self.session.sessionId)
             if continue_session.text:
                 # Forward to TTS
-                await self.say_and_wait(continue_session.text)
+                async for tts_result in self.say_and_wait(
+                    continue_session.text, siteId=self.session.siteId
+                ):
+                    yield tts_result
 
             # Start ASR listening
             _LOGGER.debug("Listening for session %s", self.session.sessionId)
-            self.publish(AsrStartListening())
+            yield AsrStartListening(
+                siteId=self.session.siteId, sessionId=self.session.sessionId
+            )
         except Exception:
             _LOGGER.exception("handle_continue")
 
     async def handle_end(
         self, end_session: DialogueEndSession
-    ) -> typing.Iterable[DialogueSessionEnded]:
+    ) -> typing.AsyncIterable[
+        typing.Union[
+            TtsSay,
+            DialogueSessionEnded,
+            DialogueSessionStarted,
+            DialogueSessionQueued,
+            AsrStartListening,
+        ]
+    ]:
         """End the current session."""
         try:
+            assert self.session is not None
             _LOGGER.debug("Session ended nominally: %s", self.session.sessionId)
-            results = await self.end_session(DialogueSessionTerminationReason.NOMINAL)
-            for result in results:
-                yield result
+            async for end_result in self.end_session(
+                DialogueSessionTerminationReason.NOMINAL, siteId=self.session.siteId
+            ):
+                yield end_result
         except Exception:
             _LOGGER.exception("handle_end")
 
     async def end_session(
-        self, reason: DialogueSessionTerminationReason
-    ) -> typing.Iterable[typing.Union[DialogueSessionEnded]]:
+        self, reason: DialogueSessionTerminationReason, siteId: str = "default"
+    ) -> typing.AsyncIterable[
+        typing.Union[
+            TtsSay,
+            DialogueSessionEnded,
+            DialogueSessionStarted,
+            DialogueSessionQueued,
+            AsrStartListening,
+        ]
+    ]:
         """End current session and start queued session."""
         assert self.session, "No session"
 
         yield DialogueSessionEnded(
             sessionId=self.session.sessionId,
-            siteId=self.siteId,
+            siteId=siteId,
             customData=self.session.customData,
             termination=DialogueSessionTermination(reason=reason),
         )
@@ -220,9 +281,8 @@ class DialogueHermesMqtt:
         # Check session queue
         if self.session_queue:
             _LOGGER.debug("Handling queued session")
-            results = await self.start_session(self.session_queue.popleft())
-            for result in results:
-                yield result
+            async for start_result in self.start_session(self.session_queue.popleft()):
+                yield start_result
 
     def handle_text_captured(
         self, text_captured: AsrTextCaptured
@@ -233,7 +293,9 @@ class DialogueHermesMqtt:
             _LOGGER.debug("Received text: %s", text_captured.text)
 
             # Stop listening
-            yield AsrStopListening(siteId=self.siteId, sessionId=self.session.sessionId)
+            yield AsrStopListening(
+                siteId=text_captured.siteId, sessionId=self.session.sessionId
+            )
 
             # Perform query
             yield NluQuery(
@@ -252,7 +314,18 @@ class DialogueHermesMqtt:
         except Exception:
             _LOGGER.exception("handle_recognized")
 
-    async def handle_not_recognized(self, not_recognized: NluIntentNotRecognized):
+    async def handle_not_recognized(
+        self, not_recognized: NluIntentNotRecognized
+    ) -> typing.AsyncIterable[
+        typing.Union[
+            DialogueIntentNotRecognized,
+            TtsSay,
+            DialogueSessionEnded,
+            DialogueSessionStarted,
+            DialogueSessionQueued,
+            AsrStartListening,
+        ]
+    ]:
         """Failed to recognized intent."""
         try:
             assert self.session, "No session"
@@ -260,30 +333,43 @@ class DialogueHermesMqtt:
             _LOGGER.warning("No intent recognized")
             if self.session.sendIntentNotRecognized:
                 # Client will handle
-                return DialogueIntentNotRecognized(
+                yield DialogueIntentNotRecognized(
                     sessionId=self.session.sessionId,
                     customData=self.session.customData,
-                    siteId=self.siteId,
+                    siteId=not_recognized.siteId,
                     input=not_recognized.input,
                 )
-            else:
-                # End session
-                return self.end_session(
-                    DialogueSessionTerminationReason.INTENT_NOT_RECOGNIZED
-                )
+
+            # End session
+            async for end_result in self.end_session(
+                DialogueSessionTerminationReason.INTENT_NOT_RECOGNIZED,
+                siteId=not_recognized.siteId,
+            ):
+                yield end_result
         except Exception:
             _LOGGER.exception("handle_not_recognized")
 
-    async def handle_wake(self, wakeword_id: str, detected: HotwordDetected):
+    async def handle_wake(
+        self, wakeword_id: str, detected: HotwordDetected
+    ) -> typing.AsyncIterable[
+        typing.Union[
+            TtsSay,
+            DialogueSessionEnded,
+            DialogueSessionStarted,
+            DialogueSessionQueued,
+            AsrStartListening,
+        ]
+    ]:
         """Wake word was detected."""
         try:
             _LOGGER.debug("Hotword detected: %s", wakeword_id)
 
-            sessionId = f"{self.siteId}-{wakeword_id}-{uuid4()}"
+            sessionId = f"{detected.siteId}-{wakeword_id}-{uuid4()}"
             new_session = SessionInfo(
                 sessionId=sessionId,
+                siteId=detected.siteId,
                 start_session=DialogueStartSession(
-                    siteId=self.siteId,
+                    siteId=detected.siteId,
                     customData=wakeword_id,
                     init=DialogueAction(canBeEnqueued=False),
                 ),
@@ -294,10 +380,15 @@ class DialogueHermesMqtt:
                 self.session_queue.appendleft(new_session)
 
                 # Abort previous session
-                await self.end_session(DialogueSessionTerminationReason.ABORTED_BY_USER)
+                async for end_result in self.end_session(
+                    DialogueSessionTerminationReason.ABORTED_BY_USER,
+                    siteId=detected.siteId,
+                ):
+                    yield end_result
             else:
                 # Start new session
-                await self.start_session(new_session)
+                async for start_result in self.start_session(new_session):
+                    yield start_result
         except Exception:
             _LOGGER.exception("handle_wake")
 
@@ -414,14 +505,16 @@ class DialogueHermesMqtt:
         except Exception:
             _LOGGER.exception("on_message")
 
-    async def say_and_wait(self, text: str) -> typing.Iterable[TtsSay]:
+    async def say_and_wait(
+        self, text: str, siteId="default"
+    ) -> typing.AsyncIterable[TtsSay]:
         """Send text to TTS system and wait for reply."""
         assert self.session, "No session"
         self.say_finished_event.clear()
 
         # Forward to TTS
         _LOGGER.debug("Say: %s", text)
-        yield TtsSay(siteId=self.siteId, sessionId=self.session.sessionId, text=text)
+        yield TtsSay(siteId=siteId, sessionId=self.session.sessionId, text=text)
 
         # Wait for finished response (with timeout)
         try:
