@@ -402,7 +402,7 @@ class DialogueHermesMqtt:
                 DialogueContinueSession.topic(),
                 DialogueEndSession.topic(),
                 TtsSayFinished.topic(),
-                NluIntent.topic(intent_name="#"),
+                NluIntent.topic(intentName="#"),
                 NluIntentNotRecognized.topic(),
                 AsrTextCaptured.topic(),
             ] + list(self.wakeword_topics.keys())
