@@ -43,6 +43,7 @@ class SessionInfo:
     intentFilter: typing.Optional[typing.List[str]] = attr.ib(default=None)
     sendIntentNotRecognized: bool = attr.ib(default=False)
     continue_session: typing.Optional[DialogueContinueSession] = attr.ib(default=None)
+    text_captured: typing.Optional[AsrTextCaptured] = attr.ib(default=None)
 
 
 # -----------------------------------------------------------------------------
@@ -269,6 +270,10 @@ class DialogueHermesMqtt:
         """End current session and start queued session."""
         assert self.session, "No session"
 
+        if not self.session.text_captured:
+            # Stop listening
+            yield AsrStopListening(siteId=siteId, sessionId=self.session.sessionId)
+
         yield DialogueSessionEnded(
             sessionId=self.session.sessionId,
             siteId=siteId,
@@ -291,6 +296,9 @@ class DialogueHermesMqtt:
         try:
             assert self.session, "No session"
             _LOGGER.debug("Received text: %s", text_captured.text)
+
+            # Record result
+            self.session.text_captured = text_captured
 
             # Stop listening
             yield AsrStopListening(
@@ -424,8 +432,8 @@ class DialogueHermesMqtt:
                     return
 
                 # Run in event loop (for TTS)
-                asyncio.run_coroutine_threadsafe(
-                    self.handle_start(DialogueStartSession(**json_payload)), self.loop
+                self.publish_all_async(
+                    self.handle_start(DialogueStartSession(**json_payload))
                 )
             elif msg.topic == DialogueContinueSession.topic():
                 # Continue session
@@ -434,9 +442,8 @@ class DialogueHermesMqtt:
                     return
 
                 # Run in event loop (for TTS)
-                asyncio.run_coroutine_threadsafe(
-                    self.handle_continue(DialogueContinueSession(**json_payload)),
-                    self.loop,
+                self.publish_all_async(
+                    self.handle_continue(DialogueContinueSession(**json_payload))
                 )
             elif msg.topic == DialogueEndSession.topic():
                 # End session
@@ -445,7 +452,8 @@ class DialogueHermesMqtt:
                     return
 
                 # Run outside event loop
-                self.handle_end(DialogueEndSession(**json_payload))
+                for message in self.handle_end(DialogueEndSession(**json_payload)):
+                    self.publish(message)
             elif msg.topic == TtsSayFinished.topic():
                 # TTS finished
                 json_payload = json.loads(msg.payload)
@@ -461,13 +469,18 @@ class DialogueHermesMqtt:
                     return
 
                 # Run outside event loop
-                self.handle_text_captured(AsrTextCaptured(**json_payload))
+                for message in self.handle_text_captured(
+                    AsrTextCaptured(**json_payload)
+                ):
+                    self.publish(message)
             elif NluIntent.is_topic(msg.topic):
                 # Intent recognized
                 json_payload = json.loads(msg.payload)
                 if not self._check_sessionId(json_payload):
                     return
 
+                # Run outside event loop
+                # TODO: Do something here
                 self.handle_recognized(NluIntent(**json_payload))
             elif msg.topic == NluIntentNotRecognized.topic():
                 # Intent recognized
@@ -476,9 +489,8 @@ class DialogueHermesMqtt:
                     return
 
                 # Run in event loop (for TTS)
-                asyncio.run_coroutine_threadsafe(
-                    self.handle_not_recognized(NluIntentNotRecognized(**json_payload)),
-                    self.loop,
+                self.publish_all_async(
+                    self.handle_not_recognized(NluIntentNotRecognized(**json_payload))
                 )
             elif msg.topic in self.wakeword_topics:
                 json_payload = json.loads(msg.payload)
@@ -505,10 +517,19 @@ class DialogueHermesMqtt:
         except Exception:
             _LOGGER.exception("on_message")
 
-    def publish_all_async(self, coro):
-        future = asyncio.run_coroutine_threadsafe(coro, self.loop)
+    def publish_all_async(self, async_generator: typing.AsyncIterable[typing.Any]):
+        """Publish all messages from an async generator"""
+        future = asyncio.run_coroutine_threadsafe(
+            self.generate_all(async_generator), self.loop
+        )
         for message in future.result():
             self.publish(message)
+
+    async def generate_all(
+        self, async_generator: typing.AsyncIterable[typing.Any]
+    ) -> typing.List[typing.Any]:
+        """Enumerate all items in an async generator and return the list"""
+        return [item async for item in async_generator]
 
     # -------------------------------------------------------------------------
 
