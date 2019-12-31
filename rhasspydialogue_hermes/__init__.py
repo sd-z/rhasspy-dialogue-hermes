@@ -77,6 +77,7 @@ class DialogueHermesMqtt:
 
         # Set when TtsSayFinished comes back
         self.say_finished_event = asyncio.Event()
+        self.say_finished_id: str = ""
         self.say_finished_timeout: float = 10
 
     # -------------------------------------------------------------------------
@@ -90,6 +91,7 @@ class DialogueHermesMqtt:
             DialogueSessionEnded,
             DialogueSessionQueued,
             AsrStartListening,
+            AsrStopListening,
         ]
     ]:
         """Starts or queues a new dialogue session."""
@@ -117,6 +119,7 @@ class DialogueHermesMqtt:
             DialogueSessionEnded,
             DialogueSessionQueued,
             AsrStartListening,
+            AsrStopListening,
         ]
     ]:
         """Start a new session."""
@@ -125,7 +128,9 @@ class DialogueHermesMqtt:
         if isinstance(start_session.init, Mapping):
             # Convert to object
             if start_session.init["type"] == DialogueActionType.NOTIFICATION:
-                start_session.init = DialogueNotification(**start_session.init)
+                start_session.init = DialogueNotification(
+                    text=start_session.init["text"]
+                )
             else:
                 start_session.init = DialogueAction(**start_session.init)
 
@@ -243,6 +248,7 @@ class DialogueHermesMqtt:
             DialogueSessionStarted,
             DialogueSessionQueued,
             AsrStartListening,
+            AsrStopListening,
         ]
     ]:
         """End the current session."""
@@ -265,12 +271,15 @@ class DialogueHermesMqtt:
             DialogueSessionStarted,
             DialogueSessionQueued,
             AsrStartListening,
+            AsrStopListening,
         ]
     ]:
         """End current session and start queued session."""
         assert self.session, "No session"
 
-        if not self.session.text_captured:
+        if (
+            self.session.start_session.init.type != DialogueActionType.NOTIFICATION
+        ) and (not self.session.text_captured):
             # Stop listening
             yield AsrStopListening(siteId=siteId, sessionId=self.session.sessionId)
 
@@ -332,6 +341,7 @@ class DialogueHermesMqtt:
             DialogueSessionStarted,
             DialogueSessionQueued,
             AsrStartListening,
+            AsrStopListening,
         ]
     ]:
         """Failed to recognized intent."""
@@ -366,6 +376,7 @@ class DialogueHermesMqtt:
             DialogueSessionStarted,
             DialogueSessionQueued,
             AsrStartListening,
+            AsrStopListening,
         ]
     ]:
         """Wake word was detected."""
@@ -432,7 +443,7 @@ class DialogueHermesMqtt:
                     return
 
                 # Run in event loop (for TTS)
-                self.publish_all_async(
+                self.publish_all(
                     self.handle_start(DialogueStartSession(**json_payload))
                 )
             elif msg.topic == DialogueContinueSession.topic():
@@ -442,7 +453,7 @@ class DialogueHermesMqtt:
                     return
 
                 # Run in event loop (for TTS)
-                self.publish_all_async(
+                self.publish_all(
                     self.handle_continue(DialogueContinueSession(**json_payload))
                 )
             elif msg.topic == DialogueEndSession.topic():
@@ -451,17 +462,19 @@ class DialogueHermesMqtt:
                 if not self._check_siteId(json_payload):
                     return
 
-                # Run outside event loop
-                for message in self.handle_end(DialogueEndSession(**json_payload)):
-                    self.publish(message)
+                # Run in event loop
+                self.publish_all(self.handle_end(DialogueEndSession(**json_payload)))
             elif msg.topic == TtsSayFinished.topic():
                 # TTS finished
                 json_payload = json.loads(msg.payload)
                 if not self._check_sessionId(json_payload):
                     return
 
-                # Signal event loop
-                self.loop.call_soon_threadsafe(self.say_finished_event.set)
+                finished = TtsSayFinished(**json_payload)
+                if finished.id == self.say_finished_id:
+                    _LOGGER.debug("Recevied finished")
+                    # Signal event loop
+                    self.loop.call_soon_threadsafe(self.say_finished_event.set)
             elif msg.topic == AsrTextCaptured.topic():
                 # Text captured
                 json_payload = json.loads(msg.payload)
@@ -489,7 +502,7 @@ class DialogueHermesMqtt:
                     return
 
                 # Run in event loop (for TTS)
-                self.publish_all_async(
+                self.publish_all(
                     self.handle_not_recognized(NluIntentNotRecognized(**json_payload))
                 )
             elif msg.topic in self.wakeword_topics:
@@ -498,7 +511,7 @@ class DialogueHermesMqtt:
                     return
 
                 wakeword_id = self.wakeword_topics[msg.topic]
-                self.publish_all_async(
+                self.publish_all(
                     self.handle_wake(wakeword_id, HotwordDetected(**json_payload))
                 )
         except Exception:
@@ -517,32 +530,35 @@ class DialogueHermesMqtt:
         except Exception:
             _LOGGER.exception("on_message")
 
-    def publish_all_async(self, async_generator: typing.AsyncIterable[typing.Any]):
+    def publish_all(self, async_generator: typing.AsyncIterable[Message]):
         """Publish all messages from an async generator"""
-        future = asyncio.run_coroutine_threadsafe(
-            self.generate_all(async_generator), self.loop
+        asyncio.run_coroutine_threadsafe(
+            self.async_publish_all(async_generator), self.loop
         )
-        for message in future.result():
-            self.publish(message)
 
-    async def generate_all(
-        self, async_generator: typing.AsyncIterable[typing.Any]
-    ) -> typing.List[typing.Any]:
-        """Enumerate all items in an async generator and return the list"""
-        return [item async for item in async_generator]
+    async def async_publish_all(self, async_generator: typing.AsyncIterable[Message]):
+        """Enumerate all messages in an async generator publish them"""
+        async for message in async_generator:
+            self.publish(message)
 
     # -------------------------------------------------------------------------
 
     async def say_and_wait(
-        self, text: str, siteId="default"
+        self, text: str, siteId="default", requestId: typing.Optional[str] = None
     ) -> typing.AsyncIterable[TtsSay]:
         """Send text to TTS system and wait for reply."""
         assert self.session, "No session"
         self.say_finished_event.clear()
+        self.say_finished_id = requestId or str(uuid4())
 
         # Forward to TTS
         _LOGGER.debug("Say: %s", text)
-        yield TtsSay(siteId=siteId, sessionId=self.session.sessionId, text=text)
+        yield TtsSay(
+            id=self.say_finished_id,
+            siteId=siteId,
+            sessionId=self.session.sessionId,
+            text=text,
+        )
 
         # Wait for finished response (with timeout)
         try:
