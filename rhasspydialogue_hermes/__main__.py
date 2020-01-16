@@ -12,7 +12,7 @@ _LOGGER = logging.getLogger(__name__)
 
 def main():
     """Main method."""
-    parser = argparse.ArgumentParser(prog="rhasspydialogue_hermes")
+    parser = argparse.ArgumentParser(prog="rhasspy-dialogue-hermes")
     parser.add_argument(
         "--wakewordId",
         action="append",
