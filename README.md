@@ -14,14 +14,14 @@ Clone the repository and create the virtual environment:
 
 ```bash
 git clone https://github.com/rhasspy/rhasspy-dialogue-hermes.git
-cd rhasspy-dialoguej-hermes
+cd rhasspy-dialogue-hermes
 make venv
 ```
 
-Run the `bin/rhasspy-dialoguej-hermes` script to access the command-line interface:
+Run the `bin/rhasspy-dialogue-hermes` script to access the command-line interface:
 
 ```bash
-bin/rhasspy-dialoguej-hermes --help
+bin/rhasspy-dialogue-hermes --help
 ```
 
 ## Building the Debian Package
@@ -62,4 +62,4 @@ optional arguments:
   --port PORT           MQTT port (default: 1883)
   --siteId SITEID       Hermes siteId(s) to listen for (default: all)
   --debug               Print DEBUG messages to the console
-  ```
+ ```
