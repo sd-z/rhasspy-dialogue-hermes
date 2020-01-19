@@ -1,5 +1,8 @@
 # Rhasspy Hermes Dialogue Manager
 
+[![Continous Integration](https://github.com/rhasspy/rhasspy-dialogue-hermes/workflows/Tests/badge.svg)](https://github.com/rhasspy/rhasspy-dialogue-hermes/actions)
+[![GitHub license](https://img.shields.io/github/license/rhasspy/rhasspy-dialogue-hermes.svg)](https://github.com/rhasspy/rhasspy-dialogue-hermes/blob/master/LICENSE)
+
 Implements `hermes/dialogueManager` functionality from [Hermes protocol](https://docs.snips.ai/reference/hermes).
 
 ## Running With Docker

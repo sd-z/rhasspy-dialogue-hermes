@@ -3,28 +3,29 @@ import asyncio
 import json
 import logging
 import typing
-from collections import deque, Mapping
+from collections import deque
+from collections.abc import Mapping
 from uuid import uuid4
 
 import attr
+from rhasspyhermes.asr import AsrStartListening, AsrStopListening, AsrTextCaptured
 from rhasspyhermes.base import Message
 from rhasspyhermes.dialogue import (
-    DialogueStartSession,
-    DialogueEndSession,
-    DialogueSessionStarted,
-    DialogueSessionQueued,
-    DialogueSessionEnded,
-    DialogueContinueSession,
-    DialogueIntentNotRecognized,
-    DialogueActionType,
-    DialogueNotification,
     DialogueAction,
+    DialogueActionType,
+    DialogueContinueSession,
+    DialogueEndSession,
+    DialogueIntentNotRecognized,
+    DialogueNotification,
+    DialogueSessionEnded,
+    DialogueSessionQueued,
+    DialogueSessionStarted,
     DialogueSessionTermination,
     DialogueSessionTerminationReason,
+    DialogueStartSession,
 )
+from rhasspyhermes.nlu import NluIntent, NluIntentNotRecognized, NluQuery
 from rhasspyhermes.tts import TtsSay, TtsSayFinished
-from rhasspyhermes.nlu import NluQuery, NluIntent, NluIntentNotRecognized
-from rhasspyhermes.asr import AsrStartListening, AsrStopListening, AsrTextCaptured
 from rhasspyhermes.wake import HotwordDetected
 
 _LOGGER = logging.getLogger(__name__)
