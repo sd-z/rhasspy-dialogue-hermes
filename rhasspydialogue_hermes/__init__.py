@@ -33,18 +33,18 @@ _LOGGER = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 
 
-@attr.s
+@attr.s(auto_attribs=True)
 class SessionInfo:
     """Information for an activte or queued dialogue session."""
 
-    sessionId: str = attr.ib()
-    siteId: str = attr.ib()
-    start_session: DialogueStartSession = attr.ib()
-    customData: str = attr.ib(default="")
-    intentFilter: typing.Optional[typing.List[str]] = attr.ib(default=None)
-    sendIntentNotRecognized: bool = attr.ib(default=False)
-    continue_session: typing.Optional[DialogueContinueSession] = attr.ib(default=None)
-    text_captured: typing.Optional[AsrTextCaptured] = attr.ib(default=None)
+    sessionId: str
+    siteId: str
+    start_session: DialogueStartSession
+    customData: str = ""
+    intentFilter: typing.Optional[typing.List[str]] = None
+    sendIntentNotRecognized: bool = False
+    continue_session: typing.Optional[DialogueContinueSession] = None
+    text_captured: typing.Optional[AsrTextCaptured] = None
 
 
 # -----------------------------------------------------------------------------
