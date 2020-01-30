@@ -33,7 +33,7 @@ _LOGGER = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 
 
-@attr.s(auto_attribs=True)
+@attr.s(auto_attribs=True, slots=True)
 class SessionInfo:
     """Information for an activte or queued dialogue session."""
 
