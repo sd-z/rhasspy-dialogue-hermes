@@ -425,7 +425,7 @@ class DialogueHermesMqtt:
                 NluIntent.topic(intentName="#"),
                 NluIntentNotRecognized.topic(),
                 AsrTextCaptured.topic(),
-            ] + list(self.wakeword_topics.keys())
+            ] + list(self.wakeword_topics)
 
             for topic in topics:
                 self.client.subscribe(topic)
