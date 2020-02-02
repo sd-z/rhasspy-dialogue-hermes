@@ -33,7 +33,7 @@ _LOGGER = logging.getLogger(__name__)
 # -----------------------------------------------------------------------------
 
 
-@attr.s(auto_attribs=True)
+@attr.s(auto_attribs=True, slots=True)
 class SessionInfo:
     """Information for an activte or queued dialogue session."""
 
@@ -425,7 +425,7 @@ class DialogueHermesMqtt:
                 NluIntent.topic(intentName="#"),
                 NluIntentNotRecognized.topic(),
                 AsrTextCaptured.topic(),
-            ] + list(self.wakeword_topics.keys())
+            ] + list(self.wakeword_topics)
 
             for topic in topics:
                 self.client.subscribe(topic)
