@@ -33,12 +33,7 @@ check:
 	pip list --outdated
 
 venv:
-	rm -rf .venv/
-	python3 -m venv .venv
-	.venv/bin/pip3 $(PIP_INSTALL) --upgrade pip
-	.venv/bin/pip3 $(PIP_INSTALL) wheel setuptools
-	.venv/bin/pip3 $(PIP_INSTALL) -r requirements.txt
-	.venv/bin/pip3 $(PIP_INSTALL) -r requirements_dev.txt
+	scripts/create-venv.sh
 
 dist: sdist debian
 
@@ -51,7 +46,7 @@ sdist:
 
 
 docker: pyinstaller
-	docker build . -t "rhasspy/rhasspy-dialogue-hermes:$(version)" -t "rhasspy/$(PACKAGE_NAME):latest"
+	docker build . -t "rhasspy/$(PACKAGE_NAME):$(version)" -t "rhasspy/$(PACKAGE_NAME):latest"
 
 deploy:
 	echo "$$DOCKER_PASSWORD" | docker login -u "$$DOCKER_USERNAME" --password-stdin
