@@ -384,7 +384,9 @@ class DialogueHermesMqtt:
         try:
             _LOGGER.debug("Hotword detected: %s", wakeword_id)
 
-            sessionId = f"{detected.siteId}-{wakeword_id}-{uuid4()}"
+            sessionId = (
+                detected.sessionId or f"{detected.siteId}-{wakeword_id}-{uuid4()}"
+            )
             new_session = SessionInfo(
                 sessionId=sessionId,
                 siteId=detected.siteId,
