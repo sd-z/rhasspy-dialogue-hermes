@@ -26,7 +26,7 @@ from rhasspyhermes.dialogue import (
 )
 from rhasspyhermes.nlu import NluIntent, NluIntentNotRecognized, NluQuery
 from rhasspyhermes.tts import TtsSay, TtsSayFinished
-from rhasspyhermes.wake import HotwordDetected
+from rhasspyhermes.wake import HotwordDetected, HotwordToggleOff, HotwordToggleOn
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -45,6 +45,8 @@ class SessionInfo:
     sendIntentNotRecognized: bool = False
     continue_session: typing.Optional[DialogueContinueSession] = None
     text_captured: typing.Optional[AsrTextCaptured] = None
+
+    # Wake word that activated this session (if any)
 
 
 # -----------------------------------------------------------------------------
@@ -121,6 +123,7 @@ class DialogueHermesMqtt:
             DialogueSessionQueued,
             AsrStartListening,
             AsrStopListening,
+            HotwordToggleOff,
         ]
     ]:
         """Start a new session."""
@@ -193,8 +196,11 @@ class DialogueHermesMqtt:
                     ):
                         yield tts_result
 
+                # Disable hotword
+                yield HotwordToggleOff(siteId=siteId, sessionId=new_session.sessionId)
+
                 # Start ASR listening
-                _LOGGER.debug("Listening for session %s", self.session.sessionId)
+                _LOGGER.debug("Listening for session %s", new_session.sessionId)
                 yield AsrStartListening(siteId=siteId, sessionId=new_session.sessionId)
 
         self.session = new_session
@@ -206,7 +212,9 @@ class DialogueHermesMqtt:
 
     async def handle_continue(
         self, continue_session: DialogueContinueSession
-    ) -> typing.AsyncIterable[typing.Union[TtsSay, AsrStartListening]]:
+    ) -> typing.AsyncIterable[
+        typing.Union[TtsSay, AsrStartListening, HotwordToggleOff]
+    ]:
         """Continue the existing session."""
         try:
             assert self.session is not None
@@ -232,6 +240,11 @@ class DialogueHermesMqtt:
                 ):
                     yield tts_result
 
+            # Disable hotword
+            yield HotwordToggleOff(
+                siteId=continue_session.siteId, sessionId=continue_session.sessionId
+            )
+
             # Start ASR listening
             _LOGGER.debug("Listening for session %s", self.session.sessionId)
             yield AsrStartListening(
@@ -250,6 +263,7 @@ class DialogueHermesMqtt:
             DialogueSessionQueued,
             AsrStartListening,
             AsrStopListening,
+            HotwordToggleOn,
         ]
     ]:
         """End the current session."""
@@ -262,6 +276,11 @@ class DialogueHermesMqtt:
                 yield end_result
         except Exception:
             _LOGGER.exception("handle_end")
+        finally:
+            # Enable hotword
+            yield HotwordToggleOn(
+                siteId=end_session.siteId, sessionId=end_session.sessionId
+            )
 
     async def end_session(
         self, reason: DialogueSessionTerminationReason, siteId: str = "default"
@@ -273,6 +292,7 @@ class DialogueHermesMqtt:
             DialogueSessionQueued,
             AsrStartListening,
             AsrStopListening,
+            HotwordToggleOn,
         ]
     ]:
         """End current session and start queued session."""
@@ -301,7 +321,7 @@ class DialogueHermesMqtt:
 
     def handle_text_captured(
         self, text_captured: AsrTextCaptured
-    ) -> typing.Iterable[typing.Union[AsrStopListening, NluQuery]]:
+    ) -> typing.Iterable[typing.Union[AsrStopListening, HotwordToggleOn, NluQuery]]:
         """Handle ASR text captured for session."""
         try:
             assert self.session, "No session"
@@ -313,6 +333,11 @@ class DialogueHermesMqtt:
             # Stop listening
             yield AsrStopListening(
                 siteId=text_captured.siteId, sessionId=self.session.sessionId
+            )
+
+            # Enable hotword
+            yield HotwordToggleOn(
+                siteId=text_captured.siteId, sessionId=text_captured.sessionId
             )
 
             # Perform query
