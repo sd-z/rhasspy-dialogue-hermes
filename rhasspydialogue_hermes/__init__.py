@@ -169,7 +169,6 @@ class DialogueHermesMqtt:
             # Action session
             action = start_session.init
             assert isinstance(action, DialogueAction)
-            _LOGGER.debug("Starting new session (id=%s)", new_session.sessionId)
 
             new_session.customData = start_session.customData
             new_session.intentFilter = action.intentFilter
