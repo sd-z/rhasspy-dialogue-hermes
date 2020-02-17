@@ -67,6 +67,7 @@ class SessionInfo:
     sendIntentNotRecognized: bool = False
     continue_session: typing.Optional[DialogueContinueSession] = None
     text_captured: typing.Optional[AsrTextCaptured] = None
+    detected: typing.Optional[HotwordDetected] = None
 
     # Wake word that activated this session (if any)
 
@@ -204,7 +205,16 @@ class DialogueHermesMqtt:
 
                 # Start ASR listening
                 _LOGGER.debug("Listening for session %s", new_session.sessionId)
-                yield AsrStartListening(siteId=siteId, sessionId=new_session.sessionId)
+                sendAudioCaptured = False
+                if new_session.detected:
+                    # Use setting from hotword detection
+                    sendAudioCaptured = new_session.detected.sendAudioCaptured
+
+                yield AsrStartListening(
+                    siteId=siteId,
+                    sessionId=new_session.sessionId,
+                    sendAudioCaptured=sendAudioCaptured,
+                )
 
         self.session = new_session
         yield DialogueSessionStarted(
@@ -380,6 +390,7 @@ class DialogueHermesMqtt:
                     customData=wakeword_id,
                     init=DialogueAction(canBeEnqueued=False),
                 ),
+                detected=detected,
             )
 
             if self.session:
