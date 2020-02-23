@@ -11,6 +11,14 @@ PIP_INSTALL ?= install
 version := $(shell cat VERSION)
 architecture := $(shell bash architecture.sh)
 
+DOCKER_PLATFORMS = linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6
+
+ifneq (,$(findstring -dev,$(version)))
+	DOCKER_TAGS = -t "rhasspy/$(PACKAGE_NAME):$(version)"
+else
+	DOCKER_TAGS = -t "rhasspy/$(PACKAGE_NAME):$(version)" -t "rhasspy/$(PACKAGE_NAME):latest"
+endif
+
 # -----------------------------------------------------------------------------
 # Python
 # -----------------------------------------------------------------------------
@@ -34,12 +42,15 @@ sdist:
 # -----------------------------------------------------------------------------
 
 
-docker: pyinstaller
+docker:
 	docker build . -t "rhasspy/$(PACKAGE_NAME):$(version)" -t "rhasspy/$(PACKAGE_NAME):latest"
 
+docker-pyinstaller: pyinstaller
+	docker build . -f Dockerfile.pyinstaller -t "rhasspy/$(PACKAGE_NAME):$(version)" -t "rhasspy/$(PACKAGE_NAME):latest"
+
 deploy:
-	echo "$$DOCKER_PASSWORD" | docker login -u "$$DOCKER_USERNAME" --password-stdin
-	docker push "rhasspy/$(PACKAGE_NAME):$(version)"
+	docker login --username rhasspy --password "$$DOCKER_PASSWORD"
+	docker-buildx build . --platform $(DOCKER_PLATFORMS) --push $(DOCKER_TAGS)
 
 # -----------------------------------------------------------------------------
 # Debian

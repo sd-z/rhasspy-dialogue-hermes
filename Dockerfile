@@ -1,7 +1,16 @@
-ARG BUILD_ARCH=amd64
-FROM ${BUILD_ARCH}/debian:buster-slim
+FROM python:3.7-alpine
 
-COPY pyinstaller/dist/* /usr/lib/rhasspydialogue_hermes/
-COPY debian/bin/* /usr/bin/
+COPY requirements.txt /
 
-ENTRYPOINT ["/usr/bin/rhasspy-dialogue-hermes"]
+RUN grep '^rhasspy-' /requirements.txt | \
+    sed -e 's|=.\+|/archive/master.tar.gz|' | \
+    sed 's|^|https://github.com/rhasspy/|' \
+    > /requirements_rhasspy.txt
+
+RUN pip install --no-cache-dir -r /requirements_rhasspy.txt
+RUN pip install --no-cache-dir -r /requirements.txt
+
+COPY rhasspydialogue_hermes/ /rhasspydialogue_hermes/
+WORKDIR /
+
+ENTRYPOINT ["python3", "-m", "rhasspydialogue_hermes"]
