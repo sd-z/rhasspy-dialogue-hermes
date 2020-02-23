@@ -50,7 +50,7 @@ docker-pyinstaller: pyinstaller
 
 deploy:
 	docker login --username rhasspy --password "$$DOCKER_PASSWORD"
-	docker-buildx build . --platform $(DOCKER_PLATFORMS) --push $(DOCKER_TAGS)
+	docker buildx build . --platform $(DOCKER_PLATFORMS) --push $(DOCKER_TAGS)
 
 # -----------------------------------------------------------------------------
 # Debian
