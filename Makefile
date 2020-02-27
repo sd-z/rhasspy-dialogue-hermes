@@ -1,12 +1,13 @@
 SHELL := bash
-PYTHON_NAME = rhasspydialogue_hermes
-PACKAGE_NAME = rhasspy-dialogue-hermes
+PACKAGE_NAME = $(shell basename "$$PWD")
+PYTHON_NAME = $(shell echo "$(PACKAGE_NAME)" | sed -e 's/-//' | sed -e 's/-/_/g')
 SOURCE = $(PYTHON_NAME)
 PYTHON_FILES = $(SOURCE)/*.py *.py
 SHELL_FILES = bin/* debian/bin/* *.sh
 PIP_INSTALL ?= install
+DOWNLOAD_DIR = download
 
-.PHONY: reformat check dist venv pyinstaller debian docker deploy docker-multiarch docker-multiarch-deploy docker-multiarch-manifest docker-multiarch-manifest-init
+.PHONY: reformat check dist venv pyinstaller debian docker deploy docker-multiarch docker-multiarch-deploy docker-multiarch-manifest docker-multiarch-manifest-init downloads
 
 version := $(shell cat VERSION)
 architecture := $(shell bash architecture.sh)
@@ -16,9 +17,9 @@ version_tag := "rhasspy/$(PACKAGE_NAME):$(version)"
 DOCKER_PLATFORMS = linux/amd64,linux/arm64,linux/arm/v7,linux/arm/v6
 
 ifneq (,$(findstring -dev,$(version)))
-	DOCKER_TAGS = -t "rhasspy/$(PACKAGE_NAME):$(version)"
+	DOCKER_TAGS = -t "$(version_tag)"
 else
-	DOCKER_TAGS = -t "rhasspy/$(PACKAGE_NAME):$(version)" -t "rhasspy/$(PACKAGE_NAME):latest"
+	DOCKER_TAGS = -t "$(version_tag)" -t "rhasspy/$(PACKAGE_NAME):latest"
 endif
 
 # -----------------------------------------------------------------------------
@@ -31,7 +32,7 @@ reformat:
 check:
 	scripts/check-code.sh $(PYTHON_FILES)
 
-venv:
+venv: downloads
 	scripts/create-venv.sh
 
 dist: sdist debian
@@ -101,8 +102,10 @@ debian:
 # -----------------------------------------------------------------------------
 
 # Rhasspy development dependencies
-rhasspy-libs: $(DOWNLOAD_DIR)/rhasspy-hermes-0.1.6.tar.gz
+RHASSPY_DEPS := $(shell grep '^rhasspy-' requirements.txt | sort | comm -3 - rhasspy_wheels.txt | sed -e 's|^|$(DOWNLOAD_DIR)/|' -e 's/==/-/' -e 's/$$/.tar.gz/')
 
-$(DOWNLOAD_DIR)/rhasspy-hermes-0.1.6.tar.gz:
+$(DOWNLOAD_DIR)/%.tar.gz:
 	mkdir -p "$(DOWNLOAD_DIR)"
-	curl -sSfL -o $@ "https://github.com/rhasspy/rhasspy-hermes/archive/master.tar.gz"
+	echo "$@" | sed -e 's|^[^/]\+/|https://github.com/rhasspy/|' -e 's|-[0-9].\+|/archive/master.tar.gz|' | xargs curl -sSfL -o "$@"
+
+downloads: $(RHASSPY_DEPS)
