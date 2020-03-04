@@ -333,6 +333,7 @@ class DialogueHermesMqtt:
                 input=text_captured.text,
                 intentFilter=self.session.intentFilter,
                 sessionId=self.session.sessionId,
+                siteId=self.session.siteId,
             )
         except Exception:
             _LOGGER.exception("handle_text_captured")
