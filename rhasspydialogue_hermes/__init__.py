@@ -128,7 +128,7 @@ class DialogueHermesMqtt:
             _LOGGER.exception("handle_start")
 
     async def start_session(
-        self, new_session: SessionInfo, siteId: str = "default"
+        self, new_session: SessionInfo
     ) -> typing.AsyncIterable[typing.Union[StartSessionType, EndSessionType]]:
         """Start a new session."""
         start_session = new_session.start_session
@@ -155,14 +155,14 @@ class DialogueHermesMqtt:
             if notification.text:
                 # Forward to TTS
                 async for tts_result in self.say_and_wait(
-                    notification.text, siteId=siteId
+                    notification.text, siteId=new_session.siteId
                 ):
                     yield tts_result
 
             # End notification session immedately
             _LOGGER.debug("Session ended nominally: %s", self.session.sessionId)
             async for end_result in self.end_session(
-                DialogueSessionTerminationReason.NOMINAL, siteId=siteId
+                DialogueSessionTerminationReason.NOMINAL, siteId=new_session.siteId
             ):
                 yield end_result
         else:
@@ -181,7 +181,7 @@ class DialogueHermesMqtt:
                     self.session_queue.append(new_session)
                     yield DialogueSessionQueued(
                         sessionId=new_session.sessionId,
-                        siteId=siteId,
+                        siteId=new_session.siteId,
                         customData=new_session.customData,
                     )
                 else:
@@ -195,12 +195,12 @@ class DialogueHermesMqtt:
                 if action.text:
                     # Forward to TTS
                     async for tts_result in self.say_and_wait(
-                        action.text, siteId=siteId
+                        action.text, siteId=new_session.siteId
                     ):
                         yield tts_result
 
                 # Disable hotword
-                yield HotwordToggleOff(siteId=siteId)
+                yield HotwordToggleOff(siteId=new_session.siteId)
 
                 # Start ASR listening
                 _LOGGER.debug("Listening for session %s", new_session.sessionId)
@@ -210,14 +210,14 @@ class DialogueHermesMqtt:
                     sendAudioCaptured = new_session.detected.sendAudioCaptured
 
                 yield AsrStartListening(
-                    siteId=siteId,
+                    siteId=new_session.siteId,
                     sessionId=new_session.sessionId,
                     sendAudioCaptured=sendAudioCaptured,
                 )
 
         self.session = new_session
         yield DialogueSessionStarted(
-            siteId=siteId,
+            siteId=new_session.siteId,
             sessionId=new_session.sessionId,
             customData=new_session.customData,
         )
@@ -282,7 +282,7 @@ class DialogueHermesMqtt:
             yield HotwordToggleOn(siteId=self.session.siteId)
 
     async def end_session(
-        self, reason: DialogueSessionTerminationReason, siteId: str = "default"
+        self, reason: DialogueSessionTerminationReason
     ) -> typing.AsyncIterable[typing.Union[EndSessionType, StartSessionType]]:
         """End current session and start queued session."""
         assert self.session, "No session"
@@ -291,7 +291,9 @@ class DialogueHermesMqtt:
             self.session.start_session.init.type != DialogueActionType.NOTIFICATION
         ) and (not self.session.text_captured):
             # Stop listening
-            yield AsrStopListening(siteId=siteId, sessionId=self.session.sessionId)
+            yield AsrStopListening(
+                siteId=self.session.siteId, sessionId=self.session.sessionId
+            )
 
         yield DialogueSessionEnded(
             sessionId=self.session.sessionId,
@@ -364,8 +366,7 @@ class DialogueHermesMqtt:
 
             # End session
             async for end_result in self.end_session(
-                DialogueSessionTerminationReason.INTENT_NOT_RECOGNIZED,
-                siteId=not_recognized.siteId,
+                DialogueSessionTerminationReason.INTENT_NOT_RECOGNIZED
             ):
                 yield end_result
         except Exception:
@@ -376,7 +377,7 @@ class DialogueHermesMqtt:
     ) -> typing.AsyncIterable[typing.Union[EndSessionType, StartSessionType]]:
         """Wake word was detected."""
         try:
-            _LOGGER.debug("Hotword detected: %s", wakeword_id)
+            _LOGGER.debug("<- %s", detected)
 
             sessionId = (
                 detected.sessionId or f"{detected.siteId}-{wakeword_id}-{uuid4()}"
@@ -398,8 +399,7 @@ class DialogueHermesMqtt:
 
                 # Abort previous session
                 async for end_result in self.end_session(
-                    DialogueSessionTerminationReason.ABORTED_BY_USER,
-                    siteId=detected.siteId,
+                    DialogueSessionTerminationReason.ABORTED_BY_USER
                 ):
                     yield end_result
             else:
