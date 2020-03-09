@@ -120,9 +120,7 @@ class DialogueHermesMqtt:
                 start_session=start_session,
             )
 
-            async for start_result in self.start_session(
-                new_session, siteId=start_session.siteId
-            ):
+            async for start_result in self.start_session(new_session):
                 yield start_result
         except Exception:
             _LOGGER.exception("handle_start")
@@ -162,7 +160,7 @@ class DialogueHermesMqtt:
             # End notification session immedately
             _LOGGER.debug("Session ended nominally: %s", self.session.sessionId)
             async for end_result in self.end_session(
-                DialogueSessionTerminationReason.NOMINAL, siteId=new_session.siteId
+                DialogueSessionTerminationReason.NOMINAL
             ):
                 yield end_result
         else:
@@ -272,7 +270,7 @@ class DialogueHermesMqtt:
         try:
             _LOGGER.debug("Session ended nominally: %s", self.session.sessionId)
             async for end_result in self.end_session(
-                DialogueSessionTerminationReason.NOMINAL, siteId=self.session.siteId
+                DialogueSessionTerminationReason.NOMINAL
             ):
                 yield end_result
         except Exception:
