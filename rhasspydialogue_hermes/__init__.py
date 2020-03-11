@@ -68,6 +68,7 @@ class SessionInfo:
     continue_session: typing.Optional[DialogueContinueSession] = None
     text_captured: typing.Optional[AsrTextCaptured] = None
     detected: typing.Optional[HotwordDetected] = None
+    wakewordId: str = ""
 
     # Wake word that activated this session (if any)
 
@@ -211,6 +212,7 @@ class DialogueHermesMqtt:
                     siteId=new_session.siteId,
                     sessionId=new_session.sessionId,
                     sendAudioCaptured=sendAudioCaptured,
+                    wakewordId=new_session.wakewordId,
                 )
 
         self.session = new_session
@@ -332,6 +334,7 @@ class DialogueHermesMqtt:
                 intentFilter=self.session.intentFilter,
                 sessionId=self.session.sessionId,
                 siteId=self.session.siteId,
+                wakewordId=text_captured.wakewordId or self.session.wakewordId,
             )
         except Exception:
             _LOGGER.exception("handle_text_captured")
@@ -372,24 +375,25 @@ class DialogueHermesMqtt:
             _LOGGER.exception("handle_not_recognized")
 
     async def handle_wake(
-        self, wakeword_id: str, detected: HotwordDetected
+        self, wakewordId: str, detected: HotwordDetected
     ) -> typing.AsyncIterable[typing.Union[EndSessionType, StartSessionType]]:
         """Wake word was detected."""
         try:
             _LOGGER.debug("<- %s", detected)
 
             sessionId = (
-                detected.sessionId or f"{detected.siteId}-{wakeword_id}-{uuid4()}"
+                detected.sessionId or f"{detected.siteId}-{wakewordId}-{uuid4()}"
             )
             new_session = SessionInfo(
                 sessionId=sessionId,
                 siteId=detected.siteId,
                 start_session=DialogueStartSession(
                     siteId=detected.siteId,
-                    customData=wakeword_id,
+                    customData=wakewordId,
                     init=DialogueAction(canBeEnqueued=False),
                 ),
                 detected=detected,
+                wakewordId=wakewordId,
             )
 
             if self.session:
@@ -513,10 +517,10 @@ class DialogueHermesMqtt:
                 if not self._check_siteId(json_payload):
                     return
 
-                wakeword_id = self.wakeword_topics[msg.topic]
+                wakewordId = self.wakeword_topics[msg.topic]
                 self.publish_all(
                     self.handle_wake(
-                        wakeword_id, HotwordDetected.from_dict(json_payload)
+                        wakewordId, HotwordDetected.from_dict(json_payload)
                     )
                 )
         except Exception:
