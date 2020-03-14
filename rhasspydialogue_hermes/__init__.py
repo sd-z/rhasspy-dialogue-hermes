@@ -525,6 +525,7 @@ class DialogueHermesMqtt:
                 )
         except Exception:
             _LOGGER.exception("on_message")
+            _LOGGER.error("%s %s", msg.topic, msg.payload)
 
     # -------------------------------------------------------------------------
 
