@@ -1,15 +1,14 @@
 """Hermes MQTT server for Rhasspy Dialogue Mananger"""
 import asyncio
-import json
 import logging
 import typing
 from collections import deque
-from collections.abc import Mapping
 from uuid import uuid4
 
 import attr
 from rhasspyhermes.asr import AsrStartListening, AsrStopListening, AsrTextCaptured
 from rhasspyhermes.base import Message
+from rhasspyhermes.client import HermesClient
 from rhasspyhermes.dialogue import (
     DialogueAction,
     DialogueActionType,
@@ -28,7 +27,7 @@ from rhasspyhermes.nlu import NluIntent, NluIntentNotRecognized, NluQuery
 from rhasspyhermes.tts import TtsSay, TtsSayFinished
 from rhasspyhermes.wake import HotwordDetected, HotwordToggleOff, HotwordToggleOn
 
-_LOGGER = logging.getLogger(__name__)
+_LOGGER = logging.getLogger("rhasspydialogue_hermes")
 
 # -----------------------------------------------------------------------------
 
@@ -80,7 +79,7 @@ class SessionInfo:
 # TODO: Entity injection
 
 
-class DialogueHermesMqtt:
+class DialogueHermesMqtt(HermesClient):
     """Hermes MQTT server for Rhasspy Dialogue Manager."""
 
     def __init__(
@@ -91,15 +90,24 @@ class DialogueHermesMqtt:
         session_timeout: float = 30.0,
         loop=None,
     ):
-        self.client = client
-        self.siteIds = siteIds or []
-        self.loop = loop or asyncio.get_event_loop()
+        super().__init__("rhasspydialogue_hermes", client, siteIds=siteIds, loop=loop)
+
+        self.subscribe(
+            DialogueStartSession,
+            DialogueContinueSession,
+            DialogueEndSession,
+            TtsSayFinished,
+            NluIntent,
+            NluIntentNotRecognized,
+            AsrTextCaptured,
+            HotwordDetected,
+        )
 
         self.session: typing.Optional[SessionInfo] = None
         self.session_queue: typing.Deque[SessionInfo] = deque()
 
-        self.wakeword_topics = {
-            HotwordDetected.topic(wakewordId=w): w for w in wakewordIds or []
+        self.wakewordIds: typing.Set[str] = set(wakewordIds) if wakewordIds else {
+            "default"
         }
 
         # Session timeout
@@ -109,6 +117,9 @@ class DialogueHermesMqtt:
         self.say_finished_event = asyncio.Event()
         self.say_finished_id: str = ""
         self.say_finished_timeout: float = 10
+
+        # Event loop
+        self.loop = loop or asyncio.get_event_loop()
 
     # -------------------------------------------------------------------------
 
@@ -135,15 +146,6 @@ class DialogueHermesMqtt:
         """Start a new session."""
         start_session = new_session.start_session
 
-        if isinstance(start_session.init, Mapping):
-            # Convert to object
-            if start_session.init["type"] == DialogueActionType.NOTIFICATION:
-                start_session.init = DialogueNotification(
-                    text=start_session.init["text"]
-                )
-            else:
-                start_session.init = DialogueAction(**start_session.init)
-
         if start_session.init.type == DialogueActionType.NOTIFICATION:
             # Notification session
             notification = start_session.init
@@ -153,13 +155,22 @@ class DialogueHermesMqtt:
                 # Create new session just for TTS
                 _LOGGER.debug("Starting new session (id=%s)", new_session.sessionId)
                 self.session = new_session
+                yield DialogueSessionStarted(
+                    siteId=new_session.siteId,
+                    sessionId=new_session.sessionId,
+                    customData=new_session.customData,
+                )
 
             if notification.text:
-                # Forward to TTS
-                async for tts_result in self.say_and_wait(
-                    notification.text, siteId=new_session.siteId
-                ):
-                    yield tts_result
+                try:
+                    async for say_result in self.say(
+                        notification.text,
+                        siteId=new_session.siteId,
+                        sessionId=new_session.sessionId,
+                    ):
+                        yield say_result
+                except asyncio.TimeoutError:
+                    _LOGGER.debug("TTS timeout")
 
             # End notification session immedately
             _LOGGER.debug("Session ended nominally: %s", self.session.sessionId)
@@ -193,21 +204,34 @@ class DialogueHermesMqtt:
                 # Start new session
                 _LOGGER.debug("Starting new session (id=%s)", new_session.sessionId)
                 self.session = new_session
+                yield DialogueSessionStarted(
+                    siteId=new_session.siteId,
+                    sessionId=new_session.sessionId,
+                    customData=new_session.customData,
+                )
 
                 if action.text:
                     # Forward to TTS
-                    async for tts_result in self.say_and_wait(
-                        action.text, siteId=new_session.siteId
-                    ):
-                        yield tts_result
+                    try:
+                        async for say_result in self.say(
+                            action.text,
+                            siteId=new_session.siteId,
+                            sessionId=new_session.sessionId,
+                        ):
+                            yield say_result
+                    except asyncio.TimeoutError:
+                        _LOGGER.debug("TTS timeout")
 
                 # Disable hotword
                 yield HotwordToggleOff(siteId=new_session.siteId)
 
                 # Start ASR listening
                 _LOGGER.debug("Listening for session %s", new_session.sessionId)
-                sendAudioCaptured = False
-                if new_session.detected:
+                sendAudioCaptured = True
+                if (
+                    new_session.detected
+                    and new_session.detected.sendAudioCaptured is not None
+                ):
                     # Use setting from hotword detection
                     sendAudioCaptured = new_session.detected.sendAudioCaptured
 
@@ -222,13 +246,6 @@ class DialogueHermesMqtt:
             asyncio.ensure_future(
                 self.handle_session_timeout(new_session.sessionId), loop=self.loop
             )
-
-        self.session = new_session
-        yield DialogueSessionStarted(
-            siteId=new_session.siteId,
-            sessionId=new_session.sessionId,
-            customData=new_session.customData,
-        )
 
     async def handle_continue(
         self, continue_session: DialogueContinueSession
@@ -255,10 +272,18 @@ class DialogueHermesMqtt:
             _LOGGER.debug("Continuing session %s", self.session.sessionId)
             if continue_session.text:
                 # Forward to TTS
-                async for tts_result in self.say_and_wait(
+                async for tts_result in self.say(
                     continue_session.text, siteId=self.session.siteId
                 ):
                     yield tts_result
+
+            # Wait for finished response (with timeout)
+            try:
+                await asyncio.wait_for(
+                    self.say_finished_event.wait(), timeout=self.say_finished_timeout
+                )
+            except asyncio.TimeoutError:
+                _LOGGER.exception("say")
 
             # Disable hotword
             yield HotwordToggleOff(siteId=self.session.siteId)
@@ -317,9 +342,11 @@ class DialogueHermesMqtt:
             async for start_result in self.start_session(self.session_queue.popleft()):
                 yield start_result
 
-    def handle_text_captured(
+    async def handle_text_captured(
         self, text_captured: AsrTextCaptured
-    ) -> typing.Iterable[typing.Union[AsrStopListening, HotwordToggleOn, NluQuery]]:
+    ) -> typing.AsyncIterable[
+        typing.Union[AsrStopListening, HotwordToggleOn, NluQuery]
+    ]:
         """Handle ASR text captured for session."""
         try:
             assert self.session, "No session"
@@ -347,7 +374,7 @@ class DialogueHermesMqtt:
         except Exception:
             _LOGGER.exception("handle_text_captured")
 
-    def handle_recognized(self, recognition: NluIntent):
+    async def handle_recognized(self, recognition: NluIntent) -> None:
         """Intent successfully recognized."""
         try:
             assert self.session, "No session"
@@ -387,8 +414,6 @@ class DialogueHermesMqtt:
     ) -> typing.AsyncIterable[typing.Union[EndSessionType, StartSessionType]]:
         """Wake word was detected."""
         try:
-            _LOGGER.debug("<- %s", detected)
-
             sessionId = (
                 detected.sessionId or f"{detected.siteId}-{wakewordId}-{uuid4()}"
             )
@@ -431,7 +456,7 @@ class DialogueHermesMqtt:
                 _LOGGER.error("Session timed out: %s", sessionId)
 
                 # Abort session
-                await self.async_publish_all(
+                await self.publish_all(
                     self.end_session(DialogueSessionTerminationReason.TIMEOUT)
                 )
         except Exception:
@@ -439,183 +464,72 @@ class DialogueHermesMqtt:
 
     # -------------------------------------------------------------------------
 
-    def on_connect(self, client, userdata, flags, rc):
-        """Connected to MQTT broker."""
-        try:
-            topics = [
-                DialogueStartSession.topic(),
-                DialogueContinueSession.topic(),
-                DialogueEndSession.topic(),
-                TtsSayFinished.topic(),
-                NluIntent.topic(intentName="#"),
-                NluIntentNotRecognized.topic(),
-                AsrTextCaptured.topic(),
-            ] + list(self.wakeword_topics)
+    async def on_message(
+        self,
+        message: Message,
+        siteId: typing.Optional[str] = None,
+        sessionId: typing.Optional[str] = None,
+        topic: typing.Optional[str] = None,
+    ):
+        if isinstance(message, DialogueStartSession):
+            await self.publish_all(self.handle_start(message))
+        elif isinstance(message, DialogueContinueSession):
+            await self.publish_all(self.handle_continue(message))
+        elif isinstance(message, DialogueEndSession):
+            await self.publish_all(self.handle_end(message))
+        elif isinstance(message, TtsSayFinished):
+            if message.id == self.say_finished_id:
+                _LOGGER.debug("Received finished")
+                self.say_finished_event.set()
+        elif isinstance(message, AsrTextCaptured):
+            # Check sessionId
+            if not self.valid_sessionId(message.sessionId):
+                return
 
-            for topic in topics:
-                self.client.subscribe(topic)
-                _LOGGER.debug("Subscribed to %s", topic)
-        except Exception:
-            _LOGGER.exception("on_connect")
-
-    def on_message(self, client, userdata, msg):
-        """Received message from MQTT broker."""
-        try:
-            _LOGGER.debug("Received %s byte(s) on %s", len(msg.payload), msg.topic)
-            if msg.topic == DialogueStartSession.topic():
-                # Start session
-                json_payload = json.loads(msg.payload)
-                if not self._check_siteId(json_payload):
-                    return
-
-                # Run in event loop (for TTS)
-                self.publish_all(
-                    self.handle_start(DialogueStartSession.from_dict(json_payload))
-                )
-            elif msg.topic == DialogueContinueSession.topic():
-                # Continue session
-                json_payload = json.loads(msg.payload)
-                if not self._check_siteId(json_payload):
-                    return
-
-                # Run in event loop (for TTS)
-                self.publish_all(
-                    self.handle_continue(
-                        DialogueContinueSession.from_dict(json_payload)
-                    )
-                )
-            elif msg.topic == DialogueEndSession.topic():
-                # End session
-                json_payload = json.loads(msg.payload)
-                if not self._check_siteId(json_payload):
-                    return
-
-                # Run in event loop
-                self.publish_all(
-                    self.handle_end(DialogueEndSession.from_dict(json_payload))
-                )
-            elif msg.topic == TtsSayFinished.topic():
-                # TTS finished
-                json_payload = json.loads(msg.payload)
-                if not self._check_sessionId(json_payload):
-                    return
-
-                finished = TtsSayFinished.from_dict(json_payload)
-                if finished.id == self.say_finished_id:
-                    _LOGGER.debug("Recevied finished")
-                    # Signal event loop
-                    self.loop.call_soon_threadsafe(self.say_finished_event.set)
-            elif msg.topic == AsrTextCaptured.topic():
-                # Text captured
-                json_payload = json.loads(msg.payload)
-                if not self._check_sessionId(json_payload):
-                    return
-
-                # Run outside event loop
-                for message in self.handle_text_captured(
-                    AsrTextCaptured.from_dict(json_payload)
-                ):
-                    self.publish(message)
-            elif NluIntent.is_topic(msg.topic):
-                # Intent recognized
-                json_payload = json.loads(msg.payload)
-                if not self._check_sessionId(json_payload):
-                    return
-
-                # Run outside event loop
-                # TODO: Do something here
-                self.handle_recognized(NluIntent.from_dict(json_payload))
-            elif msg.topic == NluIntentNotRecognized.topic():
-                # Intent recognized
-                json_payload = json.loads(msg.payload)
-                if not self._check_sessionId(json_payload):
-                    return
-
-                # Run in event loop (for TTS)
-                self.publish_all(
-                    self.handle_not_recognized(
-                        NluIntentNotRecognized.from_dict(json_payload)
-                    )
-                )
-            elif msg.topic in self.wakeword_topics:
-                json_payload = json.loads(msg.payload)
-                if not self._check_siteId(json_payload):
-                    return
-
-                wakewordId = self.wakeword_topics[msg.topic]
-                self.publish_all(
-                    self.handle_wake(
-                        wakewordId, HotwordDetected.from_dict(json_payload)
-                    )
-                )
-        except Exception:
-            _LOGGER.exception("on_message")
-            _LOGGER.error("%s %s", msg.topic, msg.payload)
+            await self.publish_all(self.handle_text_captured(message))
+        elif isinstance(message, NluIntent):
+            await self.handle_recognized(message)
+        elif isinstance(message, NluIntentNotRecognized):
+            await self.publish_all(self.handle_not_recognized(message))
+        elif isinstance(message, HotwordDetected):
+            assert topic, "Missing topic"
+            wakewordId = HotwordDetected.get_wakewordId(topic)
+            if wakewordId in self.wakewordIds:
+                await self.publish_all(self.handle_wake(wakewordId, message))
+            else:
+                _LOGGER.warning("Ignoring wake word id=%s", wakewordId)
+        else:
+            _LOGGER.warning("Unexpected message: %s", message)
 
     # -------------------------------------------------------------------------
 
-    def publish(self, message: Message, **topic_args):
-        """Publish a Hermes message to MQTT."""
-        try:
-            _LOGGER.debug("-> %s", message)
-            topic = message.topic(**topic_args)
-            payload = json.dumps(attr.asdict(message))
-            _LOGGER.debug("Publishing %s char(s) to %s", len(payload), topic)
-            self.client.publish(topic, payload)
-        except Exception:
-            _LOGGER.exception("on_message")
-
-    def publish_all(self, async_generator: typing.AsyncIterable[Message]):
-        """Publish all messages from an async generator"""
-        asyncio.run_coroutine_threadsafe(
-            self.async_publish_all(async_generator), self.loop
-        )
-
-    async def async_publish_all(self, async_generator: typing.AsyncIterable[Message]):
-        """Enumerate all messages in an async generator publish them"""
-        async for message in async_generator:
-            self.publish(message)
-
-    # -------------------------------------------------------------------------
-
-    async def say_and_wait(
-        self, text: str, siteId="default", requestId: typing.Optional[str] = None
+    async def say(
+        self,
+        text: str,
+        siteId="default",
+        sessionId="",
+        requestId: typing.Optional[str] = None,
     ) -> typing.AsyncIterable[TtsSay]:
         """Send text to TTS system and wait for reply."""
-        assert self.session, "No session"
-        self.say_finished_event.clear()
         self.say_finished_id = requestId or str(uuid4())
 
         # Forward to TTS
         _LOGGER.debug("Say: %s", text)
         yield TtsSay(
-            id=self.say_finished_id,
-            siteId=siteId,
-            sessionId=self.session.sessionId,
-            text=text,
+            id=self.say_finished_id, siteId=siteId, sessionId=sessionId, text=text
         )
 
-        # Wait for finished response (with timeout)
-        try:
-            await asyncio.wait_for(
-                self.say_finished_event.wait(), timeout=self.say_finished_timeout
-            )
-        except asyncio.TimeoutError:
-            _LOGGER.exception("say_and_wait")
+        self.say_finished_event.clear()
+        await asyncio.wait_for(
+            self.say_finished_event.wait(), self.say_finished_timeout
+        )
 
     # -------------------------------------------------------------------------
 
-    def _check_siteId(self, json_payload: typing.Dict[str, typing.Any]) -> bool:
-        if self.siteIds:
-            return json_payload.get("siteId", "default") in self.siteIds
-
-        # All sites
-        return True
-
-    def _check_sessionId(self, json_payload: typing.Dict[str, typing.Any]) -> bool:
+    def valid_sessionId(self, sessionId: str) -> bool:
         """True if payload sessionId matches current sessionId."""
         if self.session:
-            return json_payload.get("sessionId", "") == self.session.sessionId
+            return sessionId == self.session.sessionId
 
         # No current session
         return False
