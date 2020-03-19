@@ -20,6 +20,12 @@ def main():
         help="Wakeword ID(s) to listen for (default=default)",
     )
     parser.add_argument(
+        "--session-timeout",
+        type=float,
+        default=30.0,
+        help="Seconds before a dialogue session times out (default: 30)",
+    )
+    parser.add_argument(
         "--host", default="localhost", help="MQTT host (default: localhost)"
     )
     parser.add_argument(
@@ -52,7 +58,11 @@ def main():
         loop = asyncio.get_event_loop()
         client = mqtt.Client()
         hermes = DialogueHermesMqtt(
-            client, siteIds=args.siteId, wakewordIds=args.wakewordId, loop=loop
+            client,
+            siteIds=args.siteId,
+            wakewordIds=args.wakewordId,
+            session_timeout=args.session_timeout,
+            loop=loop,
         )
 
         def on_disconnect(client, userdata, flags, rc):

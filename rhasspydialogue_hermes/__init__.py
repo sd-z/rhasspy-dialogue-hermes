@@ -76,7 +76,6 @@ class SessionInfo:
 # -----------------------------------------------------------------------------
 
 # pylint: disable=W0511
-# TODO: Session timeouts
 # TODO: Dialogue configure message
 # TODO: Entity injection
 
@@ -89,6 +88,7 @@ class DialogueHermesMqtt:
         client,
         siteIds: typing.Optional[typing.List[str]] = None,
         wakewordIds: typing.Optional[typing.List[str]] = None,
+        session_timeout: float = 30.0,
         loop=None,
     ):
         self.client = client
@@ -101,6 +101,9 @@ class DialogueHermesMqtt:
         self.wakeword_topics = {
             HotwordDetected.topic(wakewordId=w): w for w in wakewordIds or []
         }
+
+        # Session timeout
+        self.session_timeout = session_timeout
 
         # Set when TtsSayFinished comes back
         self.say_finished_event = asyncio.Event()
@@ -214,6 +217,11 @@ class DialogueHermesMqtt:
                     sendAudioCaptured=sendAudioCaptured,
                     wakewordId=new_session.wakewordId,
                 )
+
+            # Set up timer
+            asyncio.ensure_future(
+                self.handle_session_timeout(new_session.sessionId), loop=self.loop
+            )
 
         self.session = new_session
         yield DialogueSessionStarted(
@@ -411,6 +419,23 @@ class DialogueHermesMqtt:
                     yield start_result
         except Exception:
             _LOGGER.exception("handle_wake")
+
+    async def handle_session_timeout(self, sessionId: str):
+        """Called when a session has timed out."""
+        try:
+            # Pause execution until timeout
+            await asyncio.sleep(self.session_timeout)
+
+            # Check if we're still on the same session
+            if self.session and self.session.sessionId == sessionId:
+                _LOGGER.error("Session timed out: %s", sessionId)
+
+                # Abort session
+                await self.async_publish_all(
+                    self.end_session(DialogueSessionTerminationReason.TIMEOUT)
+                )
+        except Exception:
+            _LOGGER.exception("session_timeout")
 
     # -------------------------------------------------------------------------
 
