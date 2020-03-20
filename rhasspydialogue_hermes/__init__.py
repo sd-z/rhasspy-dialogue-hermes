@@ -254,7 +254,9 @@ class DialogueHermesMqtt(HermesClient):
     ]:
         """Continue the existing session."""
         try:
-            assert self.session is not None
+            if self.session is None:
+                _LOGGER.warning("No session. Cannot continue.")
+                return
 
             # Update fields
             self.session.customData = (
@@ -300,7 +302,7 @@ class DialogueHermesMqtt(HermesClient):
         self, end_session: DialogueEndSession
     ) -> typing.AsyncIterable[typing.Union[EndSessionType, StartSessionType]]:
         """End the current session."""
-        assert self.session is not None
+        assert self.session is not None, "No session"
 
         try:
             _LOGGER.debug("Session ended nominally: %s", self.session.sessionId)
@@ -318,7 +320,7 @@ class DialogueHermesMqtt(HermesClient):
         self, reason: DialogueSessionTerminationReason
     ) -> typing.AsyncIterable[typing.Union[EndSessionType, StartSessionType]]:
         """End current session and start queued session."""
-        assert self.session, "No session"
+        assert self.session is not None, "No session"
 
         if (
             self.session.start_session.init.type != DialogueActionType.NOTIFICATION
@@ -349,7 +351,9 @@ class DialogueHermesMqtt(HermesClient):
     ]:
         """Handle ASR text captured for session."""
         try:
-            assert self.session, "No session"
+            if self.session is None:
+                return
+
             _LOGGER.debug("Received text: %s", text_captured.text)
 
             # Record result
@@ -377,7 +381,9 @@ class DialogueHermesMqtt(HermesClient):
     async def handle_recognized(self, recognition: NluIntent) -> None:
         """Intent successfully recognized."""
         try:
-            assert self.session, "No session"
+            if self.session is None:
+                return
+
             _LOGGER.debug("Recognized %s", recognition)
         except Exception:
             _LOGGER.exception("handle_recognized")
@@ -389,7 +395,8 @@ class DialogueHermesMqtt(HermesClient):
     ]:
         """Failed to recognized intent."""
         try:
-            assert self.session, "No session"
+            if self.session is None:
+                return
 
             _LOGGER.warning("No intent recognized")
             if self.session.sendIntentNotRecognized:
