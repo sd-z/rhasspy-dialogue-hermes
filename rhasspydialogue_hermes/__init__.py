@@ -8,7 +8,7 @@ from uuid import uuid4
 import attr
 from rhasspyhermes.asr import AsrStartListening, AsrStopListening, AsrTextCaptured
 from rhasspyhermes.base import Message
-from rhasspyhermes.client import HermesClient
+from rhasspyhermes.client import GeneratorType, HermesClient
 from rhasspyhermes.dialogue import (
     DialogueAction,
     DialogueActionType,
@@ -477,13 +477,16 @@ class DialogueHermesMqtt(HermesClient):
         siteId: typing.Optional[str] = None,
         sessionId: typing.Optional[str] = None,
         topic: typing.Optional[str] = None,
-    ):
+    ) -> GeneratorType:
         if isinstance(message, DialogueStartSession):
-            await self.publish_all(self.handle_start(message))
+            async for start_result in self.handle_start(message):
+                yield start_result
         elif isinstance(message, DialogueContinueSession):
-            await self.publish_all(self.handle_continue(message))
+            async for continue_result in self.handle_continue(message):
+                yield continue_result
         elif isinstance(message, DialogueEndSession):
-            await self.publish_all(self.handle_end(message))
+            async for end_result in self.handle_end(message):
+                yield end_result
         elif isinstance(message, TtsSayFinished):
             if message.id == self.say_finished_id:
                 _LOGGER.debug("Received finished")
@@ -493,16 +496,19 @@ class DialogueHermesMqtt(HermesClient):
             if not self.valid_sessionId(message.sessionId):
                 return
 
-            await self.publish_all(self.handle_text_captured(message))
+            async for text_result in self.handle_text_captured(message):
+                yield text_result
         elif isinstance(message, NluIntent):
             await self.handle_recognized(message)
         elif isinstance(message, NluIntentNotRecognized):
-            await self.publish_all(self.handle_not_recognized(message))
+            async for not_recognized_result in self.handle_not_recognized(message):
+                yield not_recognized_result
         elif isinstance(message, HotwordDetected):
             assert topic, "Missing topic"
             wakewordId = HotwordDetected.get_wakewordId(topic)
             if wakewordId in self.wakewordIds:
-                await self.publish_all(self.handle_wake(wakewordId, message))
+                async for wake_result in self.handle_wake(wakewordId, message):
+                    yield wake_result
             else:
                 _LOGGER.warning("Ignoring wake word id=%s", wakewordId)
         else:
