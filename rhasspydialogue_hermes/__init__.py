@@ -3,9 +3,9 @@ import asyncio
 import logging
 import typing
 from collections import deque
+from dataclasses import dataclass
 from uuid import uuid4
 
-import attr
 from rhasspyhermes.asr import AsrStartListening, AsrStopListening, AsrTextCaptured
 from rhasspyhermes.base import Message
 from rhasspyhermes.client import GeneratorType, HermesClient
@@ -54,7 +54,7 @@ EndSessionType = typing.Union[
 # -----------------------------------------------------------------------------
 
 
-@attr.s(auto_attribs=True, slots=True)
+@dataclass
 class SessionInfo:
     """Information for an active or queued dialogue session."""
 
