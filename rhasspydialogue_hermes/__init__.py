@@ -106,9 +106,7 @@ class DialogueHermesMqtt(HermesClient):
         self.session: typing.Optional[SessionInfo] = None
         self.session_queue: typing.Deque[SessionInfo] = deque()
 
-        self.wakewordIds: typing.Set[str] = set(wakewordIds) if wakewordIds else {
-            "default"
-        }
+        self.wakewordIds: typing.Set[str] = set(wakewordIds or [])
 
         # Session timeout
         self.session_timeout = session_timeout
@@ -223,7 +221,7 @@ class DialogueHermesMqtt(HermesClient):
                         _LOGGER.debug("TTS timeout")
 
                 # Disable hotword
-                yield HotwordToggleOff(siteId=new_session.siteId)
+                yield HotwordToggleOff(siteId=new_session.siteId, reason="startSession")
 
                 # Start ASR listening
                 _LOGGER.debug("Listening for session %s", new_session.sessionId)
@@ -288,7 +286,7 @@ class DialogueHermesMqtt(HermesClient):
                 _LOGGER.exception("say")
 
             # Disable hotword
-            yield HotwordToggleOff(siteId=self.session.siteId)
+            yield HotwordToggleOff(siteId=self.session.siteId, reason="continueSession")
 
             # Start ASR listening
             _LOGGER.debug("Listening for session %s", self.session.sessionId)
@@ -314,7 +312,7 @@ class DialogueHermesMqtt(HermesClient):
             _LOGGER.exception("handle_end")
         finally:
             # Enable hotword
-            yield HotwordToggleOn(siteId=self.session.siteId)
+            yield HotwordToggleOn(siteId=self.session.siteId, reason="endSession")
 
     async def end_session(
         self, reason: DialogueSessionTerminationReason
@@ -365,7 +363,7 @@ class DialogueHermesMqtt(HermesClient):
             )
 
             # Enable hotword
-            yield HotwordToggleOn(siteId=text_captured.siteId)
+            yield HotwordToggleOn(siteId=text_captured.siteId, reason="textCaptured")
 
             # Perform query
             yield NluQuery(
@@ -506,7 +504,7 @@ class DialogueHermesMqtt(HermesClient):
         elif isinstance(message, HotwordDetected):
             assert topic, "Missing topic"
             wakewordId = HotwordDetected.get_wakewordId(topic)
-            if wakewordId in self.wakewordIds:
+            if (not self.wakewordIds) or (wakewordId in self.wakewordIds):
                 async for wake_result in self.handle_wake(wakewordId, message):
                     yield wake_result
             else:

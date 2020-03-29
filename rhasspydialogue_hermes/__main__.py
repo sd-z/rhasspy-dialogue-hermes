@@ -19,8 +19,7 @@ def main():
     parser.add_argument(
         "--wakewordId",
         action="append",
-        default=["default"],
-        help="Wakeword ID(s) to listen for (default=default)",
+        help="Wakeword ID(s) to listen for (default=all)",
     )
     parser.add_argument(
         "--session-timeout",
