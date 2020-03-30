@@ -2,6 +2,8 @@
 import argparse
 import asyncio
 import logging
+import typing
+from pathlib import Path
 
 import paho.mqtt.client as mqtt
 import rhasspyhermes.cli as hermes_cli
@@ -27,6 +29,7 @@ def main():
         default=30.0,
         help="Seconds before a dialogue session times out (default: 30)",
     )
+    parser.add_argument("--sound", nargs=2, action="append", help="Add WAV id/path")
 
     hermes_cli.add_hermes_args(parser)
     args = parser.parse_args()
@@ -34,24 +37,27 @@ def main():
     hermes_cli.setup_logging(args)
     _LOGGER.debug(args)
 
+    sound_paths: typing.Dict[str, Path] = {
+        sound[0]: Path(sound[1]) for sound in args.sound or []
+    }
+
+    # Listen for messages
+    client = mqtt.Client()
+    hermes = DialogueHermesMqtt(
+        client,
+        siteIds=args.siteId,
+        wakewordIds=args.wakewordId,
+        session_timeout=args.session_timeout,
+        sound_paths=sound_paths,
+    )
+
+    _LOGGER.debug("Connecting to %s:%s", args.host, args.port)
+    hermes_cli.connect(client, args)
+    client.loop_start()
+
     try:
-        # Listen for messages
-        loop = asyncio.get_event_loop()
-        client = mqtt.Client()
-        hermes = DialogueHermesMqtt(
-            client,
-            siteIds=args.siteId,
-            wakewordIds=args.wakewordId,
-            session_timeout=args.session_timeout,
-            loop=loop,
-        )
-
-        _LOGGER.debug("Connecting to %s:%s", args.host, args.port)
-        hermes_cli.connect(client, args)
-        client.loop_start()
-
         # Run event loop
-        hermes.loop.run_forever()
+        asyncio.run(hermes.handle_messages_async())
     except KeyboardInterrupt:
         pass
     finally:

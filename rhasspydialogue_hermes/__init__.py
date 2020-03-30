@@ -2,13 +2,22 @@
 import asyncio
 import logging
 import typing
-from collections import deque
+from collections import defaultdict, deque
 from dataclasses import dataclass
+from pathlib import Path
 from uuid import uuid4
 
-from rhasspyhermes.asr import AsrStartListening, AsrStopListening, AsrTextCaptured
+from rhasspyhermes.asr import (
+    AsrStartListening,
+    AsrStopListening,
+    AsrTextCaptured,
+    AsrToggleOff,
+    AsrToggleOn,
+    AsrToggleReason,
+)
+from rhasspyhermes.audioserver import AudioPlayBytes, AudioPlayFinished
 from rhasspyhermes.base import Message
-from rhasspyhermes.client import GeneratorType, HermesClient
+from rhasspyhermes.client import GeneratorType, HermesClient, TopicArgs
 from rhasspyhermes.dialogue import (
     DialogueAction,
     DialogueActionType,
@@ -25,7 +34,12 @@ from rhasspyhermes.dialogue import (
 )
 from rhasspyhermes.nlu import NluIntent, NluIntentNotRecognized, NluQuery
 from rhasspyhermes.tts import TtsSay, TtsSayFinished
-from rhasspyhermes.wake import HotwordDetected, HotwordToggleOff, HotwordToggleOn
+from rhasspyhermes.wake import (
+    HotwordDetected,
+    HotwordToggleOff,
+    HotwordToggleOn,
+    HotwordToggleReason,
+)
 
 _LOGGER = logging.getLogger("rhasspydialogue_hermes")
 
@@ -87,10 +101,10 @@ class DialogueHermesMqtt(HermesClient):
         client,
         siteIds: typing.Optional[typing.List[str]] = None,
         wakewordIds: typing.Optional[typing.List[str]] = None,
+        sound_paths: typing.Optional[typing.Dict[str, Path]] = None,
         session_timeout: float = 30.0,
-        loop=None,
     ):
-        super().__init__("rhasspydialogue_hermes", client, siteIds=siteIds, loop=loop)
+        super().__init__("rhasspydialogue_hermes", client, siteIds=siteIds)
 
         self.subscribe(
             DialogueStartSession,
@@ -101,23 +115,25 @@ class DialogueHermesMqtt(HermesClient):
             NluIntentNotRecognized,
             AsrTextCaptured,
             HotwordDetected,
+            AudioPlayFinished,
         )
 
         self.session: typing.Optional[SessionInfo] = None
         self.session_queue: typing.Deque[SessionInfo] = deque()
 
         self.wakewordIds: typing.Set[str] = set(wakewordIds or [])
+        self.sound_paths = sound_paths or {}
 
         # Session timeout
         self.session_timeout = session_timeout
 
-        # Set when TtsSayFinished comes back
-        self.say_finished_event = asyncio.Event()
-        self.say_finished_id: str = ""
-        self.say_finished_timeout: float = 10
+        # Async events and ids for specific messages
+        self.message_events: typing.Dict[
+            typing.Type[Message], typing.Dict[str, asyncio.Event]
+        ] = defaultdict(dict)
 
-        # Event loop
-        self.loop = loop or asyncio.get_event_loop()
+        self.say_finished_timeout: float = 10
+        self.play_finished_timeout: float = 10
 
     # -------------------------------------------------------------------------
 
@@ -221,7 +237,10 @@ class DialogueHermesMqtt(HermesClient):
                         _LOGGER.debug("TTS timeout")
 
                 # Disable hotword
-                yield HotwordToggleOff(siteId=new_session.siteId, reason="startSession")
+                yield HotwordToggleOff(
+                    siteId=new_session.siteId,
+                    reason=HotwordToggleReason.DIALOGUE_SESSION,
+                )
 
                 # Start ASR listening
                 _LOGGER.debug("Listening for session %s", new_session.sessionId)
@@ -241,9 +260,7 @@ class DialogueHermesMqtt(HermesClient):
                 )
 
             # Set up timer
-            asyncio.ensure_future(
-                self.handle_session_timeout(new_session.sessionId), loop=self.loop
-            )
+            asyncio.create_task(self.handle_session_timeout(new_session.sessionId))
 
     async def handle_continue(
         self, continue_session: DialogueContinueSession
@@ -277,16 +294,10 @@ class DialogueHermesMqtt(HermesClient):
                 ):
                     yield tts_result
 
-            # Wait for finished response (with timeout)
-            try:
-                await asyncio.wait_for(
-                    self.say_finished_event.wait(), timeout=self.say_finished_timeout
-                )
-            except asyncio.TimeoutError:
-                _LOGGER.exception("say")
-
             # Disable hotword
-            yield HotwordToggleOff(siteId=self.session.siteId, reason="continueSession")
+            yield HotwordToggleOff(
+                siteId=self.session.siteId, reason=HotwordToggleReason.DIALOGUE_SESSION
+            )
 
             # Start ASR listening
             _LOGGER.debug("Listening for session %s", self.session.sessionId)
@@ -312,7 +323,9 @@ class DialogueHermesMqtt(HermesClient):
             _LOGGER.exception("handle_end")
         finally:
             # Enable hotword
-            yield HotwordToggleOn(siteId=self.session.siteId, reason="endSession")
+            yield HotwordToggleOn(
+                siteId=self.session.siteId, reason=HotwordToggleReason.DIALOGUE_SESSION
+            )
 
     async def end_session(
         self, reason: DialogueSessionTerminationReason
@@ -363,7 +376,9 @@ class DialogueHermesMqtt(HermesClient):
             )
 
             # Enable hotword
-            yield HotwordToggleOn(siteId=text_captured.siteId, reason="textCaptured")
+            yield HotwordToggleOn(
+                siteId=text_captured.siteId, reason=HotwordToggleReason.DIALOGUE_SESSION
+            )
 
             # Perform query
             yield NluQuery(
@@ -476,39 +491,67 @@ class DialogueHermesMqtt(HermesClient):
         sessionId: typing.Optional[str] = None,
         topic: typing.Optional[str] = None,
     ) -> GeneratorType:
-        if isinstance(message, DialogueStartSession):
-            async for start_result in self.handle_start(message):
-                yield start_result
-        elif isinstance(message, DialogueContinueSession):
-            async for continue_result in self.handle_continue(message):
-                yield continue_result
-        elif isinstance(message, DialogueEndSession):
-            async for end_result in self.handle_end(message):
-                yield end_result
-        elif isinstance(message, TtsSayFinished):
-            if message.id == self.say_finished_id:
-                _LOGGER.debug("Received finished")
-                self.say_finished_event.set()
-        elif isinstance(message, AsrTextCaptured):
-            # Check sessionId
+        if isinstance(message, AsrTextCaptured):
+            # ASR transcription received
             if not self.valid_sessionId(message.sessionId):
+                _LOGGER.warning("Ignoring unknown session %s", message.sessionId)
                 return
 
             async for text_result in self.handle_text_captured(message):
                 yield text_result
-        elif isinstance(message, NluIntent):
-            await self.handle_recognized(message)
-        elif isinstance(message, NluIntentNotRecognized):
-            async for not_recognized_result in self.handle_not_recognized(message):
-                yield not_recognized_result
+
+            async for play_recorded_result in self.maybe_play_sound(
+                "recorded", message.siteId
+            ):
+                yield play_recorded_result
+        elif isinstance(message, AudioPlayFinished):
+            # Audio output finished
+            play_finished_event = self.message_events[AudioPlayFinished].get(message.id)
+            if play_finished_event:
+                play_finished_event.set()
+        elif isinstance(message, DialogueStartSession):
+            # Start session
+            async for start_result in self.handle_start(message):
+                yield start_result
+        elif isinstance(message, DialogueContinueSession):
+            # Continue session
+            async for continue_result in self.handle_continue(message):
+                yield continue_result
+        elif isinstance(message, DialogueEndSession):
+            # End session
+            async for end_result in self.handle_end(message):
+                yield end_result
         elif isinstance(message, HotwordDetected):
+            # Wakeword detected
             assert topic, "Missing topic"
             wakewordId = HotwordDetected.get_wakewordId(topic)
             if (not self.wakewordIds) or (wakewordId in self.wakewordIds):
                 async for wake_result in self.handle_wake(wakewordId, message):
                     yield wake_result
+
+                async for play_wake_result in self.maybe_play_sound(
+                    "wake", message.siteId
+                ):
+                    yield play_wake_result
             else:
                 _LOGGER.warning("Ignoring wake word id=%s", wakewordId)
+        elif isinstance(message, NluIntent):
+            # Intent recognized
+            await self.handle_recognized(message)
+        elif isinstance(message, NluIntentNotRecognized):
+            # Intent not recognized
+            async for not_recognized_result in self.handle_not_recognized(message):
+                yield not_recognized_result
+
+            async for play_error_result in self.maybe_play_sound(
+                "error", message.siteId
+            ):
+                yield play_error_result
+        elif isinstance(message, TtsSayFinished):
+            # Text to speech finished
+            say_finished_event = self.message_events[TtsSayFinished].get(message.id)
+            if say_finished_event:
+                say_finished_event.set()
         else:
             _LOGGER.warning("Unexpected message: %s", message)
 
@@ -522,18 +565,72 @@ class DialogueHermesMqtt(HermesClient):
         requestId: typing.Optional[str] = None,
     ) -> typing.AsyncIterable[TtsSay]:
         """Send text to TTS system and wait for reply."""
-        self.say_finished_id = requestId or str(uuid4())
+        finished_event = asyncio.Event()
+        finished_id = requestId or str(uuid4())
+        self.message_events[TtsSayFinished][finished_id] = finished_event
 
         # Forward to TTS
         _LOGGER.debug("Say: %s", text)
-        yield TtsSay(
-            id=self.say_finished_id, siteId=siteId, sessionId=sessionId, text=text
-        )
+        yield TtsSay(id=finished_id, siteId=siteId, sessionId=sessionId, text=text)
 
-        self.say_finished_event.clear()
-        await asyncio.wait_for(
-            self.say_finished_event.wait(), self.say_finished_timeout
-        )
+        # Wait for finished event
+        await asyncio.wait_for(finished_event.wait(), self.say_finished_timeout)
+
+        # Clean up
+        self.message_events[TtsSayFinished].pop(finished_id, None)
+
+    # -------------------------------------------------------------------------
+
+    async def maybe_play_sound(
+        self,
+        sound_name: str,
+        requestId: typing.Optional[str] = None,
+        siteId: typing.Optional[str] = None,
+    ) -> typing.AsyncIterable[
+        typing.Union[
+            typing.Tuple[AudioPlayBytes, TopicArgs],
+            AsrToggleOff,
+            HotwordToggleOff,
+            AsrToggleOn,
+            HotwordToggleOn,
+        ]
+    ]:
+        """Play WAV sound through audio out if it exists."""
+        siteId = siteId or self.siteId
+        wav_path = self.sound_paths.get(sound_name)
+        if wav_path:
+            if not wav_path.is_file():
+                _LOGGER.error("WAV does not exist: %s", str(wav_path))
+                return
+
+            _LOGGER.debug("Playing WAV %s", str(wav_path))
+            wav_bytes = wav_path.read_bytes()
+
+            requestId = requestId or str(uuid4())
+            finished_event = asyncio.Event()
+            finished_id = requestId
+            self.message_events[AudioPlayFinished][finished_id] = finished_event
+
+            # Disable ASR/hotword at site
+            yield HotwordToggleOff(siteId=siteId, reason=HotwordToggleReason.PLAY_AUDIO)
+            yield AsrToggleOff(siteId=siteId, reason=AsrToggleReason.PLAY_AUDIO)
+
+            try:
+                yield (
+                    AudioPlayBytes(wav_bytes=wav_bytes),
+                    {"siteId": siteId, "requestId": requestId},
+                )
+
+                # Wait for finished event
+                await asyncio.wait_for(
+                    finished_event.wait(), self.play_finished_timeout
+                )
+            finally:
+                # Re-enable ASR/hotword at site
+                yield HotwordToggleOn(
+                    siteId=siteId, reason=HotwordToggleReason.PLAY_AUDIO
+                )
+                yield AsrToggleOn(siteId=siteId, reason=AsrToggleReason.PLAY_AUDIO)
 
     # -------------------------------------------------------------------------
 
