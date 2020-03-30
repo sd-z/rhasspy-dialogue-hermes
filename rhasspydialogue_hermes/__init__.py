@@ -65,6 +65,14 @@ EndSessionType = typing.Union[
     HotwordToggleOn,
 ]
 
+SoundsType = typing.Union[
+    typing.Tuple[AudioPlayBytes, TopicArgs],
+    AsrToggleOff,
+    HotwordToggleOff,
+    AsrToggleOn,
+    HotwordToggleOn,
+]
+
 # -----------------------------------------------------------------------------
 
 
@@ -431,7 +439,9 @@ class DialogueHermesMqtt(HermesClient):
 
     async def handle_wake(
         self, wakewordId: str, detected: HotwordDetected
-    ) -> typing.AsyncIterable[typing.Union[EndSessionType, StartSessionType]]:
+    ) -> typing.AsyncIterable[
+        typing.Union[EndSessionType, StartSessionType, SoundsType]
+    ]:
         """Wake word was detected."""
         try:
             sessionId = (
@@ -448,6 +458,12 @@ class DialogueHermesMqtt(HermesClient):
                 detected=detected,
                 wakewordId=wakewordId,
             )
+
+            # Play wake sound before ASR starts listening
+            async for play_wake_result in self.maybe_play_sound(
+                "wake", detected.siteId
+            ):
+                yield play_wake_result
 
             if self.session:
                 # Jump the queue
@@ -528,11 +544,6 @@ class DialogueHermesMqtt(HermesClient):
             if (not self.wakewordIds) or (wakewordId in self.wakewordIds):
                 async for wake_result in self.handle_wake(wakewordId, message):
                     yield wake_result
-
-                async for play_wake_result in self.maybe_play_sound(
-                    "wake", message.siteId
-                ):
-                    yield play_wake_result
             else:
                 _LOGGER.warning("Ignoring wake word id=%s", wakewordId)
         elif isinstance(message, NluIntent):
@@ -586,15 +597,7 @@ class DialogueHermesMqtt(HermesClient):
         sound_name: str,
         requestId: typing.Optional[str] = None,
         siteId: typing.Optional[str] = None,
-    ) -> typing.AsyncIterable[
-        typing.Union[
-            typing.Tuple[AudioPlayBytes, TopicArgs],
-            AsrToggleOff,
-            HotwordToggleOff,
-            AsrToggleOn,
-            HotwordToggleOn,
-        ]
-    ]:
+    ) -> typing.AsyncIterable[SoundsType]:
         """Play WAV sound through audio out if it exists."""
         siteId = siteId or self.siteId
         wav_path = self.sound_paths.get(sound_name)
