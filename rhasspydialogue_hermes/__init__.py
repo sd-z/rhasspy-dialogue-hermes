@@ -41,6 +41,8 @@ from rhasspyhermes.wake import (
     HotwordToggleReason,
 )
 
+from .utils import get_wav_duration
+
 _LOGGER = logging.getLogger("rhasspydialogue_hermes")
 
 # -----------------------------------------------------------------------------
@@ -141,7 +143,6 @@ class DialogueHermesMqtt(HermesClient):
         ] = defaultdict(dict)
 
         self.say_finished_timeout: float = 10
-        self.play_finished_timeout: float = 10
 
     # -------------------------------------------------------------------------
 
@@ -461,7 +462,7 @@ class DialogueHermesMqtt(HermesClient):
 
             # Play wake sound before ASR starts listening
             async for play_wake_result in self.maybe_play_sound(
-                "wake", detected.siteId
+                "wake", detected.siteId, block=True
             ):
                 yield play_wake_result
 
@@ -597,6 +598,7 @@ class DialogueHermesMqtt(HermesClient):
         sound_name: str,
         requestId: typing.Optional[str] = None,
         siteId: typing.Optional[str] = None,
+        block: bool = False,
     ) -> typing.AsyncIterable[SoundsType]:
         """Play WAV sound through audio out if it exists."""
         siteId = siteId or self.siteId
@@ -624,10 +626,12 @@ class DialogueHermesMqtt(HermesClient):
                     {"siteId": siteId, "requestId": requestId},
                 )
 
-                # Wait for finished event
-                await asyncio.wait_for(
-                    finished_event.wait(), self.play_finished_timeout
-                )
+                # Wait for finished event or WAV duration
+                if block:
+                    wav_duration = get_wav_duration(wav_bytes)
+                    asyncio.wait_for(finished_event.wait(), timeout=wav_duration)
+            except TimeoutError:
+                pass
             finally:
                 # Re-enable ASR/hotword at site
                 yield HotwordToggleOn(
