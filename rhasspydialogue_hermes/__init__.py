@@ -630,7 +630,7 @@ class DialogueHermesMqtt(HermesClient):
                 if block:
                     wav_duration = get_wav_duration(wav_bytes)
                     asyncio.wait_for(finished_event.wait(), timeout=wav_duration)
-            except TimeoutError:
+            except asyncio.TimeoutError:
                 pass
             finally:
                 # Re-enable ASR/hotword at site
