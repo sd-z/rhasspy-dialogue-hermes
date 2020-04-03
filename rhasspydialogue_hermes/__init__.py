@@ -531,11 +531,13 @@ class DialogueHermesMqtt(HermesClient):
                 )
         except Exception as e:
             _LOGGER.exception("session_timeout")
-            yield DialogueError(
-                error=str(e),
-                context="session_timeout",
-                siteId=siteId,
-                sessionId=sessionId,
+            self.publish(
+                DialogueError(
+                    error=str(e),
+                    context="session_timeout",
+                    siteId=siteId,
+                    sessionId=sessionId,
+                )
             )
 
     # -------------------------------------------------------------------------
