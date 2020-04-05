@@ -49,7 +49,6 @@ _LOGGER = logging.getLogger("rhasspydialogue_hermes")
 # -----------------------------------------------------------------------------
 
 StartSessionType = typing.Union[
-    TtsSay,
     DialogueSessionStarted,
     DialogueSessionEnded,
     DialogueSessionQueued,
@@ -60,7 +59,6 @@ StartSessionType = typing.Union[
 ]
 
 EndSessionType = typing.Union[
-    TtsSay,
     DialogueSessionEnded,
     DialogueSessionStarted,
     DialogueSessionQueued,
@@ -68,6 +66,10 @@ EndSessionType = typing.Union[
     AsrStopListening,
     HotwordToggleOn,
     DialogueError,
+]
+
+SayType = typing.Union[
+    TtsSay, AsrToggleOff, HotwordToggleOff, AsrToggleOn, HotwordToggleOn
 ]
 
 SoundsType = typing.Union[
@@ -151,7 +153,7 @@ class DialogueHermesMqtt(HermesClient):
 
     async def handle_start(
         self, start_session: DialogueStartSession
-    ) -> typing.AsyncIterable[typing.Union[StartSessionType, EndSessionType]]:
+    ) -> typing.AsyncIterable[typing.Union[StartSessionType, EndSessionType, SayType]]:
         """Starts or queues a new dialogue session."""
         try:
             sessionId = str(uuid4())
@@ -171,7 +173,7 @@ class DialogueHermesMqtt(HermesClient):
 
     async def start_session(
         self, new_session: SessionInfo
-    ) -> typing.AsyncIterable[typing.Union[StartSessionType, EndSessionType]]:
+    ) -> typing.AsyncIterable[typing.Union[StartSessionType, EndSessionType, SayType]]:
         """Start a new session."""
         start_session = new_session.start_session
 
@@ -195,6 +197,7 @@ class DialogueHermesMqtt(HermesClient):
                     notification.text,
                     siteId=new_session.siteId,
                     sessionId=new_session.sessionId,
+                    block=True,
                 ):
                     yield say_result
 
@@ -242,10 +245,11 @@ class DialogueHermesMqtt(HermesClient):
                         action.text,
                         siteId=new_session.siteId,
                         sessionId=new_session.sessionId,
+                        block=True,
                     ):
                         yield say_result
 
-                # Disable hotword
+                # Disable hotword for session
                 yield HotwordToggleOff(
                     siteId=new_session.siteId,
                     reason=HotwordToggleReason.DIALOGUE_SESSION,
@@ -273,9 +277,7 @@ class DialogueHermesMqtt(HermesClient):
 
     async def handle_continue(
         self, continue_session: DialogueContinueSession
-    ) -> typing.AsyncIterable[
-        typing.Union[TtsSay, AsrStartListening, HotwordToggleOff, DialogueError]
-    ]:
+    ) -> typing.AsyncIterable[typing.Union[AsrStartListening, SayType, DialogueError]]:
         """Continue the existing session."""
         if self.session is None:
             _LOGGER.warning("No session. Cannot continue.")
@@ -299,11 +301,11 @@ class DialogueHermesMqtt(HermesClient):
             if continue_session.text:
                 # Forward to TTS
                 async for tts_result in self.say(
-                    continue_session.text, siteId=self.session.siteId
+                    continue_session.text, siteId=self.session.siteId, block=True
                 ):
                     yield tts_result
 
-            # Disable hotword
+            # Disable hotword for session
             yield HotwordToggleOff(
                 siteId=self.session.siteId, reason=HotwordToggleReason.DIALOGUE_SESSION
             )
@@ -324,7 +326,7 @@ class DialogueHermesMqtt(HermesClient):
 
     async def handle_end(
         self, end_session: DialogueEndSession
-    ) -> typing.AsyncIterable[typing.Union[EndSessionType, StartSessionType]]:
+    ) -> typing.AsyncIterable[typing.Union[EndSessionType, StartSessionType, SayType]]:
         """End the current session."""
         assert self.session is not None, "No session"
 
@@ -360,7 +362,7 @@ class DialogueHermesMqtt(HermesClient):
 
     async def end_session(
         self, reason: DialogueSessionTerminationReason, siteId: str
-    ) -> typing.AsyncIterable[typing.Union[EndSessionType, StartSessionType, TtsSay]]:
+    ) -> typing.AsyncIterable[typing.Union[EndSessionType, StartSessionType, SayType]]:
         """End current session and start queued session."""
         assert self.session is not None, "No session"
 
@@ -436,7 +438,9 @@ class DialogueHermesMqtt(HermesClient):
     async def handle_not_recognized(
         self, not_recognized: NluIntentNotRecognized
     ) -> typing.AsyncIterable[
-        typing.Union[DialogueIntentNotRecognized, EndSessionType, StartSessionType]
+        typing.Union[
+            DialogueIntentNotRecognized, EndSessionType, StartSessionType, SayType
+        ]
     ]:
         """Failed to recognized intent."""
         try:
@@ -465,7 +469,7 @@ class DialogueHermesMqtt(HermesClient):
     async def handle_wake(
         self, wakewordId: str, detected: HotwordDetected
     ) -> typing.AsyncIterable[
-        typing.Union[EndSessionType, StartSessionType, SoundsType]
+        typing.Union[EndSessionType, StartSessionType, SayType, SoundsType]
     ]:
         """Wake word was detected."""
         try:
@@ -602,7 +606,9 @@ class DialogueHermesMqtt(HermesClient):
                 yield play_error_result
         elif isinstance(message, TtsSayFinished):
             # Text to speech finished
-            say_finished_event = self.message_events[TtsSayFinished].get(message.id)
+            say_finished_event = self.message_events[TtsSayFinished].pop(
+                message.id, None
+            )
             if say_finished_event:
                 say_finished_event.set()
         else:
@@ -616,21 +622,35 @@ class DialogueHermesMqtt(HermesClient):
         siteId="default",
         sessionId="",
         requestId: typing.Optional[str] = None,
-    ) -> typing.AsyncIterable[TtsSay]:
+        block: bool = True,
+    ) -> typing.AsyncIterable[
+        typing.Union[
+            TtsSay, HotwordToggleOn, HotwordToggleOff, AsrToggleOn, AsrToggleOff
+        ]
+    ]:
         """Send text to TTS system and wait for reply."""
         finished_event = asyncio.Event()
         finished_id = requestId or str(uuid4())
         self.message_events[TtsSayFinished][finished_id] = finished_event
 
-        # Forward to TTS
-        _LOGGER.debug("Say: %s", text)
-        yield TtsSay(id=finished_id, siteId=siteId, sessionId=sessionId, text=text)
+        # Disable ASR/hotword at site
+        yield HotwordToggleOff(siteId=siteId, reason=HotwordToggleReason.PLAY_AUDIO)
+        yield AsrToggleOff(siteId=siteId, reason=AsrToggleReason.PLAY_AUDIO)
 
-        # Wait for finished event
-        await asyncio.wait_for(finished_event.wait(), self.say_finished_timeout)
+        try:
+            # Forward to TTS
+            _LOGGER.debug("Say: %s", text)
+            yield TtsSay(id=finished_id, siteId=siteId, sessionId=sessionId, text=text)
 
-        # Clean up
-        self.message_events[TtsSayFinished].pop(finished_id, None)
+            if block:
+                # Wait for finished event
+                await asyncio.wait_for(
+                    finished_event.wait(), timeout=self.say_finished_timeout
+                )
+        finally:
+            # Re-enable ASR/hotword at site
+            yield HotwordToggleOn(siteId=siteId, reason=HotwordToggleReason.PLAY_AUDIO)
+            yield AsrToggleOn(siteId=siteId, reason=AsrToggleReason.PLAY_AUDIO)
 
     # -------------------------------------------------------------------------
 
