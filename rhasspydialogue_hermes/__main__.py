@@ -19,7 +19,7 @@ def main():
     """Main method."""
     parser = argparse.ArgumentParser(prog="rhasspy-dialogue-hermes")
     parser.add_argument(
-        "--wakewordId",
+        "--wakeword-id",
         action="append",
         help="Wakeword ID(s) to listen for (default=all)",
     )
@@ -45,8 +45,8 @@ def main():
     client = mqtt.Client()
     hermes = DialogueHermesMqtt(
         client,
-        siteIds=args.siteId,
-        wakewordIds=args.wakewordId,
+        site_ids=args.site_id,
+        wakeword_ids=args.wakeword_id,
         session_timeout=args.session_timeout,
         sound_paths=sound_paths,
     )

@@ -87,19 +87,19 @@ SoundsType = typing.Union[
 class SessionInfo:
     """Information for an active or queued dialogue session."""
 
-    sessionId: str
-    siteId: str
+    session_id: str
+    site_id: str
     start_session: DialogueStartSession
-    customData: str = ""
-    intentFilter: typing.Optional[typing.List[str]] = None
-    sendIntentNotRecognized: bool = False
+    custom_data: typing.Optional[str] = None
+    intent_filter: typing.Optional[typing.List[str]] = None
+    send_intent_not_recognized: bool = False
     continue_session: typing.Optional[DialogueContinueSession] = None
     text_captured: typing.Optional[AsrTextCaptured] = None
     step: int = 0
 
     # Wake word that activated this session (if any)
     detected: typing.Optional[HotwordDetected] = None
-    wakewordId: str = ""
+    wakeword_id: str = ""
 
 
 # -----------------------------------------------------------------------------
@@ -115,12 +115,12 @@ class DialogueHermesMqtt(HermesClient):
     def __init__(
         self,
         client,
-        siteIds: typing.Optional[typing.List[str]] = None,
-        wakewordIds: typing.Optional[typing.List[str]] = None,
+        site_ids: typing.Optional[typing.List[str]] = None,
+        wakeword_ids: typing.Optional[typing.List[str]] = None,
         sound_paths: typing.Optional[typing.Dict[str, Path]] = None,
         session_timeout: float = 30.0,
     ):
-        super().__init__("rhasspydialogue_hermes", client, siteIds=siteIds)
+        super().__init__("rhasspydialogue_hermes", client, site_ids=site_ids)
 
         self.subscribe(
             DialogueStartSession,
@@ -137,7 +137,7 @@ class DialogueHermesMqtt(HermesClient):
         self.session: typing.Optional[SessionInfo] = None
         self.session_queue: typing.Deque[SessionInfo] = deque()
 
-        self.wakewordIds: typing.Set[str] = set(wakewordIds or [])
+        self.wakeword_ids: typing.Set[str] = set(wakeword_ids or [])
         self.sound_paths = sound_paths or {}
 
         # Session timeout
@@ -145,7 +145,7 @@ class DialogueHermesMqtt(HermesClient):
 
         # Async events and ids for specific messages
         self.message_events: typing.Dict[
-            typing.Type[Message], typing.Dict[str, asyncio.Event]
+            typing.Type[Message], typing.Dict[typing.Optional[str], asyncio.Event]
         ] = defaultdict(dict)
 
         self.say_finished_timeout: float = 10
@@ -163,10 +163,10 @@ class DialogueHermesMqtt(HermesClient):
     ) -> typing.AsyncIterable[typing.Union[StartSessionType, EndSessionType, SayType]]:
         """Starts or queues a new dialogue session."""
         try:
-            sessionId = str(uuid4())
+            session_id = str(uuid4())
             new_session = SessionInfo(
-                sessionId=sessionId,
-                siteId=start_session.siteId,
+                session_id=session_id,
+                site_id=start_session.site_id,
                 start_session=start_session,
             )
 
@@ -175,7 +175,7 @@ class DialogueHermesMqtt(HermesClient):
         except Exception as e:
             _LOGGER.exception("handle_start")
             yield DialogueError(
-                error=str(e), context=str(start_session), siteId=start_session.siteId
+                error=str(e), context=str(start_session), site_id=start_session.site_id
             )
 
     async def start_session(
@@ -191,26 +191,26 @@ class DialogueHermesMqtt(HermesClient):
 
             if not self.session:
                 # Create new session just for TTS
-                _LOGGER.debug("Starting new session (id=%s)", new_session.sessionId)
+                _LOGGER.debug("Starting new session (id=%s)", new_session.session_id)
                 self.session = new_session
                 yield DialogueSessionStarted(
-                    siteId=new_session.siteId,
-                    sessionId=new_session.sessionId,
-                    customData=new_session.customData,
+                    site_id=new_session.site_id,
+                    session_id=new_session.session_id,
+                    custom_data=new_session.custom_data,
                 )
 
             if notification.text:
                 async for say_result in self.say(
                     notification.text,
-                    siteId=new_session.siteId,
-                    sessionId=new_session.sessionId,
+                    site_id=new_session.site_id,
+                    session_id=new_session.session_id,
                 ):
                     yield say_result
 
             # End notification session immedately
-            _LOGGER.debug("Session ended nominally: %s", self.session.sessionId)
+            _LOGGER.debug("Session ended nominally: %s", self.session.session_id)
             async for end_result in self.end_session(
-                DialogueSessionTerminationReason.NOMINAL, siteId=new_session.siteId
+                DialogueSessionTerminationReason.NOMINAL, site_id=new_session.site_id
             ):
                 yield end_result
         else:
@@ -218,36 +218,36 @@ class DialogueHermesMqtt(HermesClient):
             action = start_session.init
             assert isinstance(action, DialogueAction)
 
-            new_session.customData = start_session.customData
-            new_session.intentFilter = action.intentFilter
-            new_session.sendIntentNotRecognized = action.sendIntentNotRecognized
+            new_session.custom_data = start_session.custom_data
+            new_session.intent_filter = action.intent_filter
+            new_session.send_intent_not_recognized = action.send_intent_not_recognized
 
             if self.session:
                 # Existing session
-                if action.canBeEnqueued:
+                if action.can_be_enqueued:
                     # Queue session for later
                     self.session_queue.append(new_session)
                     yield DialogueSessionQueued(
-                        sessionId=new_session.sessionId,
-                        siteId=new_session.siteId,
-                        customData=new_session.customData,
+                        session_id=new_session.session_id,
+                        site_id=new_session.site_id,
+                        custom_data=new_session.custom_data,
                     )
                 else:
                     # Drop session
                     _LOGGER.warning("Session was dropped: %s", start_session)
             else:
                 # Start new session
-                _LOGGER.debug("Starting new session (id=%s)", new_session.sessionId)
+                _LOGGER.debug("Starting new session (id=%s)", new_session.session_id)
                 self.session = new_session
                 yield DialogueSessionStarted(
-                    siteId=new_session.siteId,
-                    sessionId=new_session.sessionId,
-                    customData=new_session.customData,
+                    site_id=new_session.site_id,
+                    session_id=new_session.session_id,
+                    custom_data=new_session.custom_data,
                 )
 
                 # Disable hotword for session
                 yield HotwordToggleOff(
-                    siteId=new_session.siteId,
+                    site_id=new_session.site_id,
                     reason=HotwordToggleReason.DIALOGUE_SESSION,
                 )
 
@@ -255,31 +255,31 @@ class DialogueHermesMqtt(HermesClient):
                     # Forward to TTS
                     async for say_result in self.say(
                         action.text,
-                        siteId=new_session.siteId,
-                        sessionId=new_session.sessionId,
+                        site_id=new_session.site_id,
+                        session_id=new_session.session_id,
                     ):
                         yield say_result
 
                 # Start ASR listening
-                _LOGGER.debug("Listening for session %s", new_session.sessionId)
-                sendAudioCaptured = True
+                _LOGGER.debug("Listening for session %s", new_session.session_id)
+                send_audio_captured = True
                 if (
                     new_session.detected
-                    and new_session.detected.sendAudioCaptured is not None
+                    and new_session.detected.send_audio_captured is not None
                 ):
                     # Use setting from hotword detection
-                    sendAudioCaptured = new_session.detected.sendAudioCaptured
+                    send_audio_captured = new_session.detected.send_audio_captured
 
                 yield AsrStartListening(
-                    siteId=new_session.siteId,
-                    sessionId=new_session.sessionId,
-                    sendAudioCaptured=sendAudioCaptured,
-                    wakewordId=new_session.wakewordId,
+                    site_id=new_session.site_id,
+                    session_id=new_session.session_id,
+                    send_audio_captured=send_audio_captured,
+                    wakeword_id=new_session.wakeword_id,
                 )
 
             # Set up timeout
             asyncio.create_task(
-                self.handle_session_timeout(new_session.sessionId, new_session.step)
+                self.handle_session_timeout(new_session.session_id, new_session.step)
             )
 
     async def handle_continue(
@@ -294,52 +294,53 @@ class DialogueHermesMqtt(HermesClient):
 
         try:
             # Update fields
-            self.session.customData = (
-                continue_session.customData or self.session.customData
+            self.session.custom_data = (
+                continue_session.custom_data or self.session.custom_data
             )
 
-            if self.session.intentFilter is not None:
+            if self.session.intent_filter is not None:
                 # Overwrite intent filter
-                self.session.intentFilter = continue_session.intentFilter
+                self.session.intent_filter = continue_session.intent_filter
 
-            self.session.sendIntentNotRecognized = (
-                continue_session.sendIntentNotRecognized
+            self.session.send_intent_not_recognized = (
+                continue_session.send_intent_not_recognized
             )
 
             self.session.step += 1
 
             _LOGGER.debug(
                 "Continuing session %s (step=%s)",
-                self.session.sessionId,
+                self.session.session_id,
                 self.session.step,
             )
 
             # Stop listening
             yield AsrStopListening(
-                siteId=self.session.siteId, sessionId=self.session.sessionId
+                site_id=self.session.site_id, session_id=self.session.session_id
             )
 
             # Ensure hotword is disabled for session
             yield HotwordToggleOff(
-                siteId=self.session.siteId, reason=HotwordToggleReason.DIALOGUE_SESSION
+                site_id=self.session.site_id,
+                reason=HotwordToggleReason.DIALOGUE_SESSION,
             )
 
             if continue_session.text:
                 # Forward to TTS
                 async for tts_result in self.say(
-                    continue_session.text, siteId=self.session.siteId
+                    continue_session.text, site_id=self.session.site_id
                 ):
                     yield tts_result
 
             # Start ASR listening
-            _LOGGER.debug("Listening for session %s", self.session.sessionId)
+            _LOGGER.debug("Listening for session %s", self.session.session_id)
             yield AsrStartListening(
-                siteId=self.session.siteId, sessionId=self.session.sessionId
+                site_id=self.session.site_id, session_id=self.session.session_id
             )
 
             # Set up timeout
             asyncio.create_task(
-                self.handle_session_timeout(self.session.sessionId, self.session.step)
+                self.handle_session_timeout(self.session.session_id, self.session.step)
             )
 
         except Exception as e:
@@ -347,8 +348,8 @@ class DialogueHermesMqtt(HermesClient):
             yield DialogueError(
                 error=str(e),
                 context=str(continue_session),
-                siteId=self.session.siteId,
-                sessionId=continue_session.sessionId,
+                site_id=self.session.site_id,
+                session_id=continue_session.session_id,
             )
 
     async def handle_end(
@@ -360,18 +361,18 @@ class DialogueHermesMqtt(HermesClient):
 
         try:
             # Update fields
-            session.customData = end_session.customData or session.customData
+            session.custom_data = end_session.custom_data or session.custom_data
 
-            _LOGGER.debug("Session ended nominally: %s", session.sessionId)
+            _LOGGER.debug("Session ended nominally: %s", session.session_id)
             async for end_result in self.end_session(
-                DialogueSessionTerminationReason.NOMINAL, siteId=session.siteId
+                DialogueSessionTerminationReason.NOMINAL, site_id=session.site_id
             ):
                 yield end_result
 
             if end_session.text:
                 # Forward to TTS
                 async for tts_result in self.say(
-                    end_session.text, siteId=session.siteId
+                    end_session.text, site_id=session.site_id
                 ):
                     yield tts_result
         except Exception as e:
@@ -379,17 +380,17 @@ class DialogueHermesMqtt(HermesClient):
             yield DialogueError(
                 error=str(e),
                 context=str(end_session),
-                siteId=session.siteId,
-                sessionId=end_session.sessionId,
+                site_id=session.site_id,
+                session_id=end_session.session_id,
             )
 
             # Enable hotword on error
             yield HotwordToggleOn(
-                siteId=session.siteId, reason=HotwordToggleReason.DIALOGUE_SESSION
+                site_id=session.site_id, reason=HotwordToggleReason.DIALOGUE_SESSION
             )
 
     async def end_session(
-        self, reason: DialogueSessionTerminationReason, siteId: str
+        self, reason: DialogueSessionTerminationReason, site_id: str
     ) -> typing.AsyncIterable[typing.Union[EndSessionType, StartSessionType, SayType]]:
         """End current session and start queued session."""
         assert self.session is not None, "No session"
@@ -397,12 +398,14 @@ class DialogueHermesMqtt(HermesClient):
 
         if session.start_session.init.type != DialogueActionType.NOTIFICATION:
             # Stop listening
-            yield AsrStopListening(siteId=session.siteId, sessionId=session.sessionId)
+            yield AsrStopListening(
+                site_id=session.site_id, session_id=session.session_id
+            )
 
         yield DialogueSessionEnded(
-            siteId=siteId,
-            sessionId=session.sessionId,
-            customData=session.customData,
+            site_id=site_id,
+            session_id=session.session_id,
+            custom_data=session.custom_data,
             termination=DialogueSessionTermination(reason=reason),
         )
 
@@ -416,7 +419,7 @@ class DialogueHermesMqtt(HermesClient):
         else:
             # Enable hotword if no queued sessions
             yield HotwordToggleOn(
-                siteId=session.siteId, reason=HotwordToggleReason.DIALOGUE_SESSION
+                site_id=session.site_id, reason=HotwordToggleReason.DIALOGUE_SESSION
             )
 
     async def handle_text_captured(
@@ -436,21 +439,22 @@ class DialogueHermesMqtt(HermesClient):
 
             # Stop listening
             yield AsrStopListening(
-                siteId=text_captured.siteId, sessionId=self.session.sessionId
+                site_id=text_captured.site_id, session_id=self.session.session_id
             )
 
             # Enable hotword
             yield HotwordToggleOn(
-                siteId=text_captured.siteId, reason=HotwordToggleReason.DIALOGUE_SESSION
+                site_id=text_captured.site_id,
+                reason=HotwordToggleReason.DIALOGUE_SESSION,
             )
 
             # Perform query
             yield NluQuery(
                 input=text_captured.text,
-                intentFilter=self.session.intentFilter,
-                sessionId=self.session.sessionId,
-                siteId=self.session.siteId,
-                wakewordId=text_captured.wakewordId or self.session.wakewordId,
+                intent_filter=self.session.intent_filter,
+                session_id=self.session.session_id,
+                site_id=self.session.site_id,
+                wakeword_id=text_captured.wakeword_id or self.session.wakeword_id,
             )
         except Exception:
             _LOGGER.exception("handle_text_captured")
@@ -475,58 +479,58 @@ class DialogueHermesMqtt(HermesClient):
         """Failed to recognized intent."""
         try:
             if self.session is None or (
-                self.session.sessionId != not_recognized.sessionId
+                self.session.session_id != not_recognized.session_id
             ):
-                _LOGGER.warning("No session for %s", not_recognized.sessionId)
+                _LOGGER.warning("No session for %s", not_recognized.session_id)
                 return
 
             _LOGGER.warning(
-                "No intent recognized (sessionId=%s)", not_recognized.sessionId
+                "No intent recognized (session_id=%s)", not_recognized.session_id
             )
 
-            if self.session.sendIntentNotRecognized:
+            if self.session.send_intent_not_recognized:
                 # Client will handle
                 yield DialogueIntentNotRecognized(
-                    sessionId=self.session.sessionId,
-                    customData=self.session.customData,
-                    siteId=not_recognized.siteId,
+                    session_id=self.session.session_id,
+                    custom_data=self.session.custom_data,
+                    site_id=not_recognized.site_id,
                     input=not_recognized.input,
                 )
             else:
                 # End session automatically
                 async for end_result in self.end_session(
                     DialogueSessionTerminationReason.INTENT_NOT_RECOGNIZED,
-                    siteId=not_recognized.siteId,
+                    site_id=not_recognized.site_id,
                 ):
                     yield end_result
         except Exception:
             _LOGGER.exception("handle_not_recognized")
 
     async def handle_wake(
-        self, wakewordId: str, detected: HotwordDetected
+        self, wakeword_id: str, detected: HotwordDetected
     ) -> typing.AsyncIterable[
         typing.Union[EndSessionType, StartSessionType, SayType, SoundsType]
     ]:
         """Wake word was detected."""
         try:
-            sessionId = (
-                detected.sessionId or f"{detected.siteId}-{wakewordId}-{uuid4()}"
+            session_id = (
+                detected.session_id or f"{detected.site_id}-{wakeword_id}-{uuid4()}"
             )
             new_session = SessionInfo(
-                sessionId=sessionId,
-                siteId=detected.siteId,
+                session_id=session_id,
+                site_id=detected.site_id,
                 start_session=DialogueStartSession(
-                    siteId=detected.siteId,
-                    customData=wakewordId,
-                    init=DialogueAction(canBeEnqueued=False),
+                    site_id=detected.site_id,
+                    custom_data=wakeword_id,
+                    init=DialogueAction(can_be_enqueued=False),
                 ),
                 detected=detected,
-                wakewordId=wakewordId,
+                wakeword_id=wakeword_id,
             )
 
             # Play wake sound before ASR starts listening
             async for play_wake_result in self.maybe_play_sound(
-                "wake", siteId=detected.siteId
+                "wake", site_id=detected.site_id
             ):
                 yield play_wake_result
 
@@ -537,7 +541,7 @@ class DialogueHermesMqtt(HermesClient):
                 # Abort previous session
                 async for end_result in self.end_session(
                     DialogueSessionTerminationReason.ABORTED_BY_USER,
-                    siteId=self.session.siteId,
+                    site_id=self.session.site_id,
                 ):
                     yield end_result
             else:
@@ -547,12 +551,12 @@ class DialogueHermesMqtt(HermesClient):
         except Exception as e:
             _LOGGER.exception("handle_wake")
             yield DialogueError(
-                error=str(e), context=str(detected), siteId=detected.siteId
+                error=str(e), context=str(detected), site_id=detected.site_id
             )
 
-    async def handle_session_timeout(self, sessionId: str, step: int):
+    async def handle_session_timeout(self, session_id: str, step: int):
         """Called when a session has timed out."""
-        siteId = self.siteId
+        site_id = self.site_id
 
         try:
             # Pause execution until timeout
@@ -561,16 +565,16 @@ class DialogueHermesMqtt(HermesClient):
             # Check if we're still on the same session and step (i.e., no continues)
             if (
                 self.session
-                and (self.session.sessionId == sessionId)
+                and (self.session.session_id == session_id)
                 and (self.session.step == step)
             ):
-                _LOGGER.error("Session timed out: %s", sessionId)
-                siteId = self.session.siteId
+                _LOGGER.error("Session timed out: %s", session_id)
+                site_id = self.session.site_id
 
                 # Abort session
                 await self.publish_all(
                     self.end_session(
-                        DialogueSessionTerminationReason.TIMEOUT, siteId=siteId
+                        DialogueSessionTerminationReason.TIMEOUT, site_id=site_id
                     )
                 )
         except Exception as e:
@@ -579,8 +583,8 @@ class DialogueHermesMqtt(HermesClient):
                 DialogueError(
                     error=str(e),
                     context="session_timeout",
-                    siteId=siteId,
-                    sessionId=sessionId,
+                    site_id=site_id,
+                    session_id=session_id,
                 )
             )
 
@@ -589,18 +593,20 @@ class DialogueHermesMqtt(HermesClient):
     async def on_message(
         self,
         message: Message,
-        siteId: typing.Optional[str] = None,
-        sessionId: typing.Optional[str] = None,
+        site_id: typing.Optional[str] = None,
+        session_id: typing.Optional[str] = None,
         topic: typing.Optional[str] = None,
     ) -> GeneratorType:
         if isinstance(message, AsrTextCaptured):
             # ASR transcription received
-            if not self.valid_sessionId(message.sessionId):
-                _LOGGER.warning("Ignoring unknown session %s", message.sessionId)
+            if (not message.session_id) or (
+                not self.valid_session_id(message.session_id)
+            ):
+                _LOGGER.warning("Ignoring unknown session %s", message.session_id)
                 return
 
             async for play_recorded_result in self.maybe_play_sound(
-                "recorded", siteId=message.siteId
+                "recorded", site_id=message.site_id
             ):
                 yield play_recorded_result
 
@@ -627,19 +633,19 @@ class DialogueHermesMqtt(HermesClient):
         elif isinstance(message, HotwordDetected):
             # Wakeword detected
             assert topic, "Missing topic"
-            wakewordId = HotwordDetected.get_wakewordId(topic)
-            if (not self.wakewordIds) or (wakewordId in self.wakewordIds):
-                async for wake_result in self.handle_wake(wakewordId, message):
+            wakeword_id = HotwordDetected.get_wakeword_id(topic)
+            if (not self.wakeword_ids) or (wakeword_id in self.wakeword_ids):
+                async for wake_result in self.handle_wake(wakeword_id, message):
                     yield wake_result
             else:
-                _LOGGER.warning("Ignoring wake word id=%s", wakewordId)
+                _LOGGER.warning("Ignoring wake word id=%s", wakeword_id)
         elif isinstance(message, NluIntent):
             # Intent recognized
             await self.handle_recognized(message)
         elif isinstance(message, NluIntentNotRecognized):
             # Intent not recognized
             async for play_error_result in self.maybe_play_sound(
-                "error", siteId=message.siteId
+                "error", site_id=message.site_id
             ):
                 yield play_error_result
 
@@ -660,9 +666,9 @@ class DialogueHermesMqtt(HermesClient):
     async def say(
         self,
         text: str,
-        siteId="default",
-        sessionId="",
-        requestId: typing.Optional[str] = None,
+        site_id="default",
+        session_id="",
+        request_id: typing.Optional[str] = None,
         block: bool = True,
     ) -> typing.AsyncIterable[
         typing.Union[
@@ -671,12 +677,12 @@ class DialogueHermesMqtt(HermesClient):
     ]:
         """Send text to TTS system and wait for reply."""
         finished_event = asyncio.Event()
-        finished_id = requestId or str(uuid4())
+        finished_id = request_id or str(uuid4())
         self.message_events[TtsSayFinished][finished_id] = finished_event
 
         # Disable ASR/hotword at site
-        yield HotwordToggleOff(siteId=siteId, reason=HotwordToggleReason.TTS_SAY)
-        yield AsrToggleOff(siteId=siteId, reason=AsrToggleReason.TTS_SAY)
+        yield HotwordToggleOff(site_id=site_id, reason=HotwordToggleReason.TTS_SAY)
+        yield AsrToggleOff(site_id=site_id, reason=AsrToggleReason.TTS_SAY)
 
         # Wait for messages to be delivered
         await asyncio.sleep(self.toggle_delay)
@@ -684,7 +690,9 @@ class DialogueHermesMqtt(HermesClient):
         try:
             # Forward to TTS
             _LOGGER.debug("Say: %s", text)
-            yield TtsSay(id=finished_id, siteId=siteId, sessionId=sessionId, text=text)
+            yield TtsSay(
+                id=finished_id, site_id=site_id, session_id=session_id, text=text
+            )
 
             if block:
                 # Wait for finished event
@@ -703,20 +711,20 @@ class DialogueHermesMqtt(HermesClient):
             await asyncio.sleep(self.toggle_delay)
 
             # Re-enable ASR/hotword at site
-            yield HotwordToggleOn(siteId=siteId, reason=HotwordToggleReason.TTS_SAY)
-            yield AsrToggleOn(siteId=siteId, reason=AsrToggleReason.TTS_SAY)
+            yield HotwordToggleOn(site_id=site_id, reason=HotwordToggleReason.TTS_SAY)
+            yield AsrToggleOn(site_id=site_id, reason=AsrToggleReason.TTS_SAY)
 
     # -------------------------------------------------------------------------
 
     async def maybe_play_sound(
         self,
         sound_name: str,
-        siteId: typing.Optional[str] = None,
-        requestId: typing.Optional[str] = None,
+        site_id: typing.Optional[str] = None,
+        request_id: typing.Optional[str] = None,
         block: bool = True,
     ) -> typing.AsyncIterable[SoundsType]:
         """Play WAV sound through audio out if it exists."""
-        siteId = siteId or self.siteId
+        site_id = site_id or self.site_id
         wav_path = self.sound_paths.get(sound_name)
         if wav_path:
             if not wav_path.is_file():
@@ -726,14 +734,16 @@ class DialogueHermesMqtt(HermesClient):
             _LOGGER.debug("Playing WAV %s", str(wav_path))
             wav_bytes = wav_path.read_bytes()
 
-            requestId = requestId or str(uuid4())
+            request_id = request_id or str(uuid4())
             finished_event = asyncio.Event()
-            finished_id = requestId
+            finished_id = request_id
             self.message_events[AudioPlayFinished][finished_id] = finished_event
 
             # Disable ASR/hotword at site
-            yield HotwordToggleOff(siteId=siteId, reason=HotwordToggleReason.PLAY_AUDIO)
-            yield AsrToggleOff(siteId=siteId, reason=AsrToggleReason.PLAY_AUDIO)
+            yield HotwordToggleOff(
+                site_id=site_id, reason=HotwordToggleReason.PLAY_AUDIO
+            )
+            yield AsrToggleOff(site_id=site_id, reason=AsrToggleReason.PLAY_AUDIO)
 
             # Wait for messages to be delivered
             await asyncio.sleep(self.toggle_delay)
@@ -741,7 +751,7 @@ class DialogueHermesMqtt(HermesClient):
             try:
                 yield (
                     AudioPlayBytes(wav_bytes=wav_bytes),
-                    {"siteId": siteId, "requestId": requestId},
+                    {"site_id": site_id, "request_id": request_id},
                 )
 
                 # Wait for finished event or WAV duration
@@ -760,16 +770,16 @@ class DialogueHermesMqtt(HermesClient):
 
                 # Re-enable ASR/hotword at site
                 yield HotwordToggleOn(
-                    siteId=siteId, reason=HotwordToggleReason.PLAY_AUDIO
+                    site_id=site_id, reason=HotwordToggleReason.PLAY_AUDIO
                 )
-                yield AsrToggleOn(siteId=siteId, reason=AsrToggleReason.PLAY_AUDIO)
+                yield AsrToggleOn(site_id=site_id, reason=AsrToggleReason.PLAY_AUDIO)
 
     # -------------------------------------------------------------------------
 
-    def valid_sessionId(self, sessionId: str) -> bool:
-        """True if payload sessionId matches current sessionId."""
+    def valid_session_id(self, session_id: str) -> bool:
+        """True if payload session_id matches current session_id."""
         if self.session:
-            return sessionId == self.session.sessionId
+            return session_id == self.session.session_id
 
         # No current session
         return False
