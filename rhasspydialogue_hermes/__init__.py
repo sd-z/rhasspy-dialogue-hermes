@@ -21,6 +21,7 @@ from rhasspyhermes.client import GeneratorType, HermesClient, TopicArgs
 from rhasspyhermes.dialogue import (
     DialogueAction,
     DialogueActionType,
+    DialogueConfigure,
     DialogueContinueSession,
     DialogueEndSession,
     DialogueError,
@@ -126,6 +127,7 @@ class DialogueHermesMqtt(HermesClient):
             DialogueStartSession,
             DialogueContinueSession,
             DialogueEndSession,
+            DialogueConfigure,
             TtsSayFinished,
             NluIntent,
             NluIntentNotRecognized,
@@ -155,6 +157,9 @@ class DialogueHermesMqtt(HermesClient):
 
         # Seconds to wait after ASR/hotword toggle off
         self.toggle_delay: float = 0
+
+        # Intent filter applied to NLU queries by default
+        self.default_intent_filter: typing.Optional[typing.List[str]] = None
 
     # -------------------------------------------------------------------------
 
@@ -293,14 +298,11 @@ class DialogueHermesMqtt(HermesClient):
             return
 
         try:
-            # Update fields
-            self.session.custom_data = (
-                continue_session.custom_data or self.session.custom_data
-            )
+            if continue_session.custom_data is not None:
+                # Overwrite custom data
+                self.session.custom_data = continue_session.custom_data
 
-            if self.session.intent_filter is not None:
-                # Overwrite intent filter
-                self.session.intent_filter = continue_session.intent_filter
+            self.session.intent_filter = continue_session.intent_filter
 
             self.session.send_intent_not_recognized = (
                 continue_session.send_intent_not_recognized
@@ -361,7 +363,8 @@ class DialogueHermesMqtt(HermesClient):
 
         try:
             # Update fields
-            session.custom_data = end_session.custom_data or session.custom_data
+            if end_session.custom_data is not None:
+                session.custom_data = end_session.custom_data
 
             _LOGGER.debug("Session ended nominally: %s", session.session_id)
             async for end_result in self.end_session(
@@ -451,7 +454,7 @@ class DialogueHermesMqtt(HermesClient):
             # Perform query
             yield NluQuery(
                 input=text_captured.text,
-                intent_filter=self.session.intent_filter,
+                intent_filter=self.session.intent_filter or self.default_intent_filter,
                 session_id=self.session.session_id,
                 site_id=self.session.site_id,
                 wakeword_id=text_captured.wakeword_id or self.session.wakeword_id,
@@ -588,6 +591,18 @@ class DialogueHermesMqtt(HermesClient):
                 )
             )
 
+    def handle_configure(self, configure: DialogueConfigure):
+        """Set default intent filter."""
+        self.default_intent_filter = [
+            intent.intent_id for intent in configure.intents if intent.enable
+        ]
+
+        if self.default_intent_filter:
+            _LOGGER.debug("Default intent filter set: %s", self.default_intent_filter)
+        else:
+            self.default_intent_filter = None
+            _LOGGER.debug("Removed default intent filter")
+
     # -------------------------------------------------------------------------
 
     async def on_message(
@@ -618,6 +633,9 @@ class DialogueHermesMqtt(HermesClient):
             play_finished_event = self.message_events[AudioPlayFinished].get(message.id)
             if play_finished_event:
                 play_finished_event.set()
+        elif isinstance(message, DialogueConfigure):
+            # Configure intent filter
+            self.handle_configure(message)
         elif isinstance(message, DialogueStartSession):
             # Start session
             async for start_result in self.handle_start(message):
