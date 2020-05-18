@@ -106,7 +106,6 @@ class SessionInfo:
 # -----------------------------------------------------------------------------
 
 # pylint: disable=W0511
-# TODO: Dialogue configure message
 # TODO: Entity injection
 
 
@@ -783,7 +782,7 @@ class DialogueHermesMqtt(HermesClient):
             except Exception:
                 _LOGGER.exception("maybe_play_sound")
             finally:
-                # Wait for audio to finish play
+                # Wait for audio to finish playing
                 await asyncio.sleep(self.toggle_delay)
 
                 # Re-enable ASR/hotword at site
