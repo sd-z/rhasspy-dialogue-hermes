@@ -23,7 +23,7 @@ setuptools.setup(
     install_requires=requirements,
     entry_points={
         "console_scripts": [
-            "rhasspydialogue_hermes = rhasspydialogue_hermes.__main__:main"
+            "rhasspy-dialogue-hermes = rhasspydialogue_hermes.__main__:main"
         ]
     },
     classifiers=[
