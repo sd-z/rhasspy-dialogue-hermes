@@ -329,7 +329,9 @@ class DialogueHermesMqtt(HermesClient):
             if continue_session.text:
                 # Forward to TTS
                 async for tts_result in self.say(
-                    continue_session.text, site_id=self.session.site_id
+                    continue_session.text,
+                    site_id=self.session.site_id,
+                    session_id=continue_session.session_id,
                 ):
                     yield tts_result
 
@@ -374,7 +376,9 @@ class DialogueHermesMqtt(HermesClient):
             if end_session.text:
                 # Forward to TTS
                 async for tts_result in self.say(
-                    end_session.text, site_id=session.site_id
+                    end_session.text,
+                    site_id=session.site_id,
+                    session_id=end_session.session_id,
                 ):
                     yield tts_result
         except Exception as e:
