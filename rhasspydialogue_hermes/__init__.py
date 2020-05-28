@@ -363,6 +363,16 @@ class DialogueHermesMqtt(HermesClient):
         session = self.session
 
         try:
+            # Say text before ending session
+            if end_session.text:
+                # Forward to TTS
+                async for tts_result in self.say(
+                    end_session.text,
+                    site_id=session.site_id,
+                    session_id=end_session.session_id,
+                ):
+                    yield tts_result
+
             # Update fields
             if end_session.custom_data is not None:
                 session.custom_data = end_session.custom_data
@@ -372,15 +382,6 @@ class DialogueHermesMqtt(HermesClient):
                 DialogueSessionTerminationReason.NOMINAL, site_id=session.site_id
             ):
                 yield end_result
-
-            if end_session.text:
-                # Forward to TTS
-                async for tts_result in self.say(
-                    end_session.text,
-                    site_id=session.site_id,
-                    session_id=end_session.session_id,
-                ):
-                    yield tts_result
         except Exception as e:
             _LOGGER.exception("handle_end")
             yield DialogueError(
