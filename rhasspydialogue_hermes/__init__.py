@@ -98,6 +98,7 @@ class SessionInfo:
     text_captured: typing.Optional[AsrTextCaptured] = None
     step: int = 0
     send_audio_captured: bool = True
+    lang: typing.Optional[str] = None
 
     # Wake word that activated this session (if any)
     detected: typing.Optional[HotwordDetected] = None
@@ -202,6 +203,7 @@ class DialogueHermesMqtt(HermesClient):
                     site_id=new_session.site_id,
                     session_id=new_session.session_id,
                     custom_data=new_session.custom_data,
+                    lang=new_session.lang,
                 )
 
             if notification.text:
@@ -248,6 +250,7 @@ class DialogueHermesMqtt(HermesClient):
                     site_id=new_session.site_id,
                     session_id=new_session.session_id,
                     custom_data=new_session.custom_data,
+                    lang=new_session.lang,
                 )
 
                 # Disable hotword for session
@@ -281,6 +284,7 @@ class DialogueHermesMqtt(HermesClient):
                     session_id=new_session.session_id,
                     send_audio_captured=new_session.send_audio_captured,
                     wakeword_id=new_session.wakeword_id,
+                    lang=new_session.lang,
                 )
 
             # Set up timeout
@@ -302,6 +306,10 @@ class DialogueHermesMqtt(HermesClient):
             if continue_session.custom_data is not None:
                 # Overwrite custom data
                 self.session.custom_data = continue_session.custom_data
+
+            if continue_session.lang is not None:
+                # Overwrite language
+                self.session.lang = continue_session.lang
 
             self.session.intent_filter = continue_session.intent_filter
 
@@ -343,6 +351,7 @@ class DialogueHermesMqtt(HermesClient):
                 site_id=self.session.site_id,
                 session_id=self.session.session_id,
                 send_audio_captured=self.session.send_audio_captured,
+                lang=self.session.lang,
             )
 
             # Set up timeout
@@ -466,6 +475,7 @@ class DialogueHermesMqtt(HermesClient):
                 session_id=self.session.session_id,
                 site_id=self.session.site_id,
                 wakeword_id=text_captured.wakeword_id or self.session.wakeword_id,
+                lang=text_captured.lang or self.session.lang,
             )
         except Exception:
             _LOGGER.exception("handle_text_captured")
@@ -537,6 +547,7 @@ class DialogueHermesMqtt(HermesClient):
                 ),
                 detected=detected,
                 wakeword_id=wakeword_id,
+                lang=detected.lang,
             )
 
             # Play wake sound before ASR starts listening
