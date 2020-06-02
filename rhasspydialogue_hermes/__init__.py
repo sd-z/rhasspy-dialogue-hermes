@@ -97,6 +97,7 @@ class SessionInfo:
     continue_session: typing.Optional[DialogueContinueSession] = None
     text_captured: typing.Optional[AsrTextCaptured] = None
     step: int = 0
+    send_audio_captured: bool = True
 
     # Wake word that activated this session (if any)
     detected: typing.Optional[HotwordDetected] = None
@@ -266,18 +267,19 @@ class DialogueHermesMqtt(HermesClient):
 
                 # Start ASR listening
                 _LOGGER.debug("Listening for session %s", new_session.session_id)
-                send_audio_captured = True
                 if (
                     new_session.detected
                     and new_session.detected.send_audio_captured is not None
                 ):
                     # Use setting from hotword detection
-                    send_audio_captured = new_session.detected.send_audio_captured
+                    new_session.send_audio_captured = (
+                        new_session.detected.send_audio_captured
+                    )
 
                 yield AsrStartListening(
                     site_id=new_session.site_id,
                     session_id=new_session.session_id,
-                    send_audio_captured=send_audio_captured,
+                    send_audio_captured=new_session.send_audio_captured,
                     wakeword_id=new_session.wakeword_id,
                 )
 
@@ -338,7 +340,9 @@ class DialogueHermesMqtt(HermesClient):
             # Start ASR listening
             _LOGGER.debug("Listening for session %s", self.session.session_id)
             yield AsrStartListening(
-                site_id=self.session.site_id, session_id=self.session.session_id
+                site_id=self.session.site_id,
+                session_id=self.session.session_id,
+                send_audio_captured=self.session.send_audio_captured,
             )
 
             # Set up timeout
