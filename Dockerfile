@@ -24,9 +24,6 @@ COPY scripts/create-venv.sh ${APP_DIR}/scripts/
 RUN cd ${APP_DIR} && \
     make install
 
-# Strip binaries and shared libraries
-RUN (find ${APP_DIR} -type f \\( -name '*.so*' -or -executable \\) -print0 | xargs -0 strip --strip-unneeded -- 2>/dev/null) || true
-
 # -----------------------------------------------------------------------------
 
 FROM ubuntu:eoan as run
