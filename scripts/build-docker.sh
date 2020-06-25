@@ -7,12 +7,12 @@ src_dir="$(realpath "${this_dir}/..")"
 
 # -----------------------------------------------------------------------------
 
-: "${PLATFORMS=linux/amd64,linux/arm/v7,linux/arm64,linux/arm/v6}"
+: "${PLATFORMS=linux/amd64,linux/arm/v7,linux/arm64}"
 : "${DOCKER_REGISTRY=docker.io}"
 
 DOCKERFILE="${src_dir}/Dockerfile"
 
-if [[ -z "${NO_PROXY}" ]]; then
+if [[ -n "${PROXY}" ]]; then
     export PROXY_IP="$(hostname -I | awk '{print $1}')"
     export PROXY_PORT=3142
     export PROXY="${PROXY_IP}:${PROXY_PORT}"
