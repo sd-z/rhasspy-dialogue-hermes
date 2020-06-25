@@ -1,6 +1,6 @@
 SHELL := bash
 
-.PHONY: reformat check dist install
+.PHONY: reformat check dist install sdist deploy
 
 all:
 
@@ -24,3 +24,11 @@ sdist:
 
 test:
 	scripts/run-tests.sh
+
+# -----------------------------------------------------------------------------
+# Docker
+# -----------------------------------------------------------------------------
+
+deploy:
+	docker login --username rhasspy --password "$$DOCKER_PASSWORD"
+	docker buildx build . --platform linux/amd64,linux/arm/v7,linux/arm64 --tag rhasspy/rhasspy-dialogue-hermes --push

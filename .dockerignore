@@ -1,6 +1,7 @@
 *
-!pyinstaller/dist
-!debian/bin
-
 !requirements.txt
+!Makefile
+!scripts/create-venv.sh
+
+!bin/rhasspy-dialogue-hermes
 !rhasspydialogue_hermes/*.py

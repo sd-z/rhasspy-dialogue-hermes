@@ -1,23 +1,37 @@
-ARG BUILD_ARCH
-FROM ${BUILD_ARCH}/python:3.7-alpine
-ARG BUILD_ARCH
-ARG FRIENDLY_ARCH
+FROM ubuntu:eoan as build
 
-# Multi-arch
-COPY etc/qemu-arm-static /usr/bin/
-COPY etc/qemu-aarch64-static /usr/bin/
+ENV LANG C.UTF-8
+ENV APPDIR=/usr/lib/rhasspy-dialogue-hermes
 
-COPY requirements.txt /
+RUN apt-get update && \
+    apt-get install --no-install-recommends --yes \
+        python3 python3-dev python3-setuptools python3-pip python3-venv \
+        build-essential
 
-RUN grep '^rhasspy-' /requirements.txt | \
-    sed -e 's|=.\+|/archive/master.tar.gz|' | \
-    sed 's|^|https://github.com/rhasspy/|' \
-    > /requirements_rhasspy.txt
+COPY Makefile requirements.txt ${APP_DIR}/
+RUN cd ${APP_DIR} && \
+    make install
 
-RUN pip install --no-cache-dir -r /requirements_rhasspy.txt
-RUN pip install --no-cache-dir -r /requirements.txt
+# Strip binaries and shared libraries
+RUN (find ${APP_DIR} -type f \( -name '*.so*' -or -executable \) -print0 | xargs -0 strip --strip-unneeded -- 2>/dev/null) || true
 
-COPY rhasspydialogue_hermes/ /rhasspydialogue_hermes/
-WORKDIR /
+# -----------------------------------------------------------------------------
 
-ENTRYPOINT ["python3", "-m", "rhasspydialogue_hermes"]
+FROM ubuntu:eoan as run
+
+ENV LANG C.UTF-8
+
+RUN apt-get update && \
+    apt-get install --yes --no-install-recommends \
+        python3 libpython3.7
+
+ENV APP_DIR=/usr/lib/rhasspy-dialogue-hermes
+
+# Copy virtual environment
+COPY --from=build ${APP_DIR}/.venv/ ${APP_DIR}/.venv/
+
+# Copy source
+COPY bin/rhasspy-dialogue-hermes ${APP_DIR}/bin/
+COPY rhasspydialogue_hermes/ ${APP_DIR}/rhasspydialogue_hermes/
+
+ENTRYPOINT ["bash", "/usr/bin/rhasspy-dialogue-hermes/bin/rhasspy-dialogue-hermes"]
