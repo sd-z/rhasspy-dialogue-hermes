@@ -681,10 +681,12 @@ class DialogueHermesMqtt(HermesClient):
             await self.handle_recognized(message)
         elif isinstance(message, NluIntentNotRecognized):
             # Intent not recognized
-            async for play_error_result in self.maybe_play_sound(
-                "error", site_id=message.site_id
-            ):
-                yield play_error_result
+            _LOGGER.debug("NlUIntentNotRecognized.implicit:%s", message.implicit)
+            if not message.implicit:
+                async for play_error_result in self.maybe_play_sound(
+                    "error", site_id=message.site_id
+                ):
+                    yield play_error_result
 
             async for not_recognized_result in self.handle_not_recognized(message):
                 yield not_recognized_result
